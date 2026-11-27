@@ -102,6 +102,15 @@ async function startClient(remote: unknown, options: { scrub?: (text: string) =>
 }
 
 const settle = (ms = 2000) => vi.advanceTimersByTimeAsync(ms);
+// A batch is compressed off the timers the tests fake, so on a slow machine it can outlast them:
+// wait for it on the real clock.
+const realTimeout = globalThis.setTimeout;
+async function batchSent(server: Server) {
+  for (let i = 0; i < 300 && server.batches === 0; i++) {
+    await vi.advanceTimersByTimeAsync(100);
+    await new Promise((resolve) => realTimeout(resolve, 10));
+  }
+}
 const events = (server: Server, kind?: string): HitEvent[] => server.hits.flatMap((hit) => hit.events).filter((e) => !kind || e.k === kind);
 const kimmiKeys = (storage: Storage) => Object.keys(storage).filter((key) => key.startsWith('kimmi.'));
 
@@ -150,6 +159,7 @@ describe('remote config', () => {
     const server = await startClient(config({ recording: true, analytics: null }));
     client.track('signup');
     await settle(6000);
+    await batchSent(server);
     expect(server.hits).toEqual([]);
     expect(server.batches).toBeGreaterThan(0);
   });
@@ -376,6 +386,7 @@ describe('visit identity', () => {
     const memory = server.hits[0]!.visitId;
     client.optIn();
     await settle(4000);
+    await batchSent(server);
     expect(rrweb.state.starts).toBe(1);
     expect(server.batches).toBeGreaterThan(0);
     const session = client.getSessionId();
