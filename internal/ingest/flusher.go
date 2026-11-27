@@ -20,6 +20,7 @@ var ErrBufferFull = errors.New("ingest buffer full")
 // FlushStore is the store method the flusher needs.
 type FlushStore interface {
 	ApplyFlush(ctx context.Context, blocks []store.IngestBlock, at int64) error
+	ApplyHits(ctx context.Context, hits []store.Hit) error
 }
 
 // slabSize is the unit the buffer grows by. Payloads are copied back to
@@ -35,6 +36,12 @@ type segment struct {
 	blocks []store.IngestBlock
 	slabs  []*[]byte
 	size   int64
+	// hits are analytics posts; hitBytes is what they count for in the
+	// buffer, and blocksDone says the blocks are already written, so a
+	// retry only applies the hits.
+	hits       []store.Hit
+	hitBytes   map[string]int64
+	blocksDone bool
 }
 
 func (s *segment) append(payload []byte) {
@@ -83,6 +90,9 @@ type Flusher struct {
 
 	writing sync.Mutex // one flush at a time
 	lastKey int64
+
+	// OnHits is told about every flush of analytics hits that was stored.
+	OnHits func(hits []store.Hit)
 }
 
 // NewFlusher returns an empty buffer that writes live objects named after node.
@@ -121,11 +131,28 @@ func (f *Flusher) Add(b store.IngestBlock, payload []byte) error {
 	return nil
 }
 
+// AddHit buffers one analytics hit; size is what it counts for (its body).
+func (f *Flusher) AddHit(h store.Hit, size int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.size+size > f.maxBuffer || f.byProject[h.ProjectID]+size > f.maxProject {
+		return ErrBufferFull
+	}
+	f.cur.hits = append(f.cur.hits, h)
+	if f.cur.hitBytes == nil {
+		f.cur.hitBytes = map[string]int64{}
+	}
+	f.cur.hitBytes[h.ProjectID] += size
+	f.size += size
+	f.byProject[h.ProjectID] += size
+	return nil
+}
+
 func (f *Flusher) take() []*segment {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := f.retry
-	if len(f.cur.blocks) > 0 {
+	if len(f.cur.blocks) > 0 || len(f.cur.hits) > 0 {
 		out = append(out, f.cur)
 		// The next segment will likely hold about as many batches.
 		f.cur = &segment{blocks: make([]store.IngestBlock, 0, min(len(f.cur.blocks), 4096))}
@@ -143,6 +170,12 @@ func (f *Flusher) done(segs []*segment) {
 		for _, b := range s.blocks {
 			if f.byProject[b.ProjectID] -= b.Length; f.byProject[b.ProjectID] <= 0 {
 				delete(f.byProject, b.ProjectID)
+			}
+		}
+		for project, n := range s.hitBytes {
+			f.size -= n
+			if f.byProject[project] -= n; f.byProject[project] <= 0 {
+				delete(f.byProject, project)
 			}
 		}
 		s.release()
@@ -168,36 +201,61 @@ func (f *Flusher) Flush(ctx context.Context) error {
 
 	var count int
 	var total int64
+	var hits []store.Hit
 	for _, s := range segs {
+		hits = append(hits, s.hits...)
+		if s.blocksDone {
+			continue
+		}
 		count += len(s.blocks)
 		total += s.size
 	}
-	blocks := make([]store.IngestBlock, 0, count)
-	parts := make([][]byte, 0, total/slabSize+int64(len(segs)))
-	var base int64
-	for _, s := range segs {
-		for _, b := range s.blocks {
-			b.FileKey, b.Offset = key, base+b.Offset
-			blocks = append(blocks, b)
+	var err error
+	if count > 0 {
+		blocks := make([]store.IngestBlock, 0, count)
+		parts := make([][]byte, 0, total/slabSize+int64(len(segs)))
+		var base int64
+		for _, s := range segs {
+			if s.blocksDone {
+				continue
+			}
+			for _, b := range s.blocks {
+				b.FileKey, b.Offset = key, base+b.Offset
+				blocks = append(blocks, b)
+			}
+			rest := s.size
+			for _, sl := range s.slabs {
+				n := min(rest, slabSize)
+				parts = append(parts, (*sl)[:n])
+				rest -= n
+			}
+			base += s.size
 		}
-		rest := s.size
-		for _, sl := range s.slabs {
-			n := min(rest, slabSize)
-			parts = append(parts, (*sl)[:n])
-			rest -= n
+		err = f.blob.PutReader(ctx, key, &partsReader{parts: parts, size: total}, total)
+		if err == nil {
+			err = f.store.ApplyFlush(ctx, blocks, ms)
 		}
-		base += s.size
+		f.stats.flushed(now, err)
+		if err != nil {
+			f.mu.Lock()
+			f.retry = segs
+			f.mu.Unlock()
+			return fmt.Errorf("flush %d batches: %w", count, err)
+		}
+		for _, s := range segs {
+			s.blocksDone = true
+		}
 	}
-	err := f.blob.PutReader(ctx, key, &partsReader{parts: parts, size: total}, total)
-	if err == nil {
-		err = f.store.ApplyFlush(ctx, blocks, ms)
-	}
-	f.stats.flushed(now, err)
-	if err != nil {
-		f.mu.Lock()
-		f.retry = segs
-		f.mu.Unlock()
-		return fmt.Errorf("flush %d batches: %w", count, err)
+	if len(hits) > 0 {
+		if err := f.store.ApplyHits(ctx, hits); err != nil {
+			f.mu.Lock()
+			f.retry = segs
+			f.mu.Unlock()
+			return fmt.Errorf("flush %d hits: %w", len(hits), err)
+		}
+		if f.OnHits != nil {
+			f.OnHits(hits)
+		}
 	}
 	f.done(segs)
 	return nil

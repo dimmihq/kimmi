@@ -38,6 +38,10 @@ type Handler struct {
 	// MaxReading caps the body bytes being read at once across requests;
 	// past it a batch is answered 503 before its body is read. 0: no cap.
 	MaxReading int64
+	// Salts, Feedback and OnFeedback serve the analytics routes.
+	Salts      *Salts
+	Feedback   FeedbackStore
+	OnFeedback func(f store.Feedback)
 
 	reading atomic.Int64
 }
@@ -46,6 +50,8 @@ type Handler struct {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /i/v1/config", h.config)
 	mux.HandleFunc("POST /i/v1/batch", h.batch)
+	mux.HandleFunc("POST /i/v1/hit", h.hit)
+	mux.HandleFunc("POST /i/v1/feedback", h.feedback)
 	mux.HandleFunc("OPTIONS /i/v1/", h.preflight)
 }
 

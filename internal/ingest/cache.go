@@ -15,11 +15,14 @@ import (
 
 // Project is what the ingest path knows about a public key.
 type Project struct {
-	ID      string
-	OrgID   string
-	Origins []string
+	ID       string
+	OrgID    string
+	Name     string
+	Timezone string
+	Origins  []string
 	// Config is the ready-to-send /i/v1/config body.
-	Config []byte
+	Config   []byte
+	Settings settings.Settings
 }
 
 // ProjectLister is the one store query the cache needs.
@@ -36,11 +39,12 @@ type Cache struct {
 
 	mu    sync.RWMutex
 	byKey map[string]*Project
+	byID  map[string]*Project
 }
 
 // NewCache returns an empty cache; call Load before serving.
 func NewCache(s ProjectLister, log *slog.Logger) *Cache {
-	return &Cache{store: s, log: log, byKey: map[string]*Project{}}
+	return &Cache{store: s, log: log, byKey: map[string]*Project{}, byID: map[string]*Project{}}
 }
 
 // Lookup finds the live project with this public key.
@@ -51,6 +55,14 @@ func (c *Cache) Lookup(key string) (*Project, bool) {
 	return p, ok
 }
 
+// ByID finds a live project by its id.
+func (c *Cache) ByID(id string) (*Project, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	p, ok := c.byID[id]
+	return p, ok
+}
+
 // Load replaces the cache with the projects in the database.
 func (c *Cache) Load(ctx context.Context) error {
 	projects, err := c.store.ListAllProjects(ctx)
@@ -58,12 +70,16 @@ func (c *Cache) Load(ctx context.Context) error {
 		return fmt.Errorf("load project cache: %w", err)
 	}
 	next := make(map[string]*Project, len(projects))
+	byID := make(map[string]*Project, len(projects))
 	for _, p := range projects {
 		s := settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred)
-		next[p.PublicKey] = &Project{ID: p.ID, OrgID: p.OrgID, Origins: normalizeOrigins(p.Origins), Config: configBody(true, s)}
+		proj := &Project{ID: p.ID, OrgID: p.OrgID, Name: p.Name, Timezone: p.Timezone, Origins: normalizeOrigins(p.Origins),
+			Config: configBody(true, s), Settings: s}
+		next[p.PublicKey] = proj
+		byID[p.ID] = proj
 	}
 	c.mu.Lock()
-	c.byKey = next
+	c.byKey, c.byID = next, byID
 	c.mu.Unlock()
 	return nil
 }
@@ -90,14 +106,27 @@ func (c *Cache) Run(ctx context.Context, every time.Duration) {
 }
 
 type configResponse struct {
-	Recording  bool             `json:"recording"`
-	SampleRate int              `json:"sampleRate"`
-	Privacy    settings.Privacy `json:"privacy"`
-	Capture    settings.Capture `json:"capture"`
+	Recording  bool              `json:"recording"`
+	SampleRate int               `json:"sampleRate"`
+	Privacy    settings.Privacy  `json:"privacy"`
+	Capture    settings.Capture  `json:"capture"`
+	Analytics  analyticsConfig   `json:"analytics"`
+	Feedback   settings.Feedback `json:"feedback"`
+}
+
+// analyticsConfig is the part of the analytics settings the SDK acts on.
+type analyticsConfig struct {
+	Enabled    bool `json:"enabled"`
+	Cookieless bool `json:"cookieless"`
+	AutoEvents bool `json:"autoEvents"`
+	Heatmaps   bool `json:"heatmaps"`
 }
 
 func configBody(recording bool, s settings.Settings) []byte {
-	b, _ := json.Marshal(configResponse{Recording: recording, SampleRate: s.Capture.SampleRate, Privacy: s.Privacy, Capture: s.Capture})
+	a := s.Analytics
+	b, _ := json.Marshal(configResponse{Recording: recording, SampleRate: s.Capture.SampleRate, Privacy: s.Privacy, Capture: s.Capture,
+		Analytics: analyticsConfig{Enabled: recording && a.Enabled, Cookieless: a.Cookieless, AutoEvents: a.AutoEvents, Heatmaps: a.Heatmaps},
+		Feedback:  settings.Feedback{Widget: recording && a.Enabled && s.Feedback.Widget}})
 	return b
 }
 

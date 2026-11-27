@@ -18,8 +18,26 @@ import (
 )
 
 type fakeStore struct {
-	fail   error
-	blocks []store.IngestBlock
+	fail     error
+	failHits error
+	blocks   []store.IngestBlock
+	hits     []store.Hit
+	feedback []store.Feedback
+}
+
+func (f *fakeStore) ApplyHits(_ context.Context, hits []store.Hit) error {
+	if f.failHits != nil {
+		return f.failHits
+	}
+	f.hits = append(f.hits, hits...)
+	return nil
+}
+
+func (f *fakeStore) DaySalt(_ context.Context, day string) (string, error) { return "salt-" + day, nil }
+
+func (f *fakeStore) CreateFeedback(_ context.Context, fb store.Feedback) error {
+	f.feedback = append(f.feedback, fb)
+	return nil
 }
 
 func (f *fakeStore) ApplyFlush(_ context.Context, blocks []store.IngestBlock, _ int64) error {
