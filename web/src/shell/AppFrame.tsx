@@ -50,6 +50,7 @@ import {
   isUnder,
   type NavPage,
   OVERVIEW,
+  PROJECT_GROUPS,
   PROJECT_PAGES,
   PROJECT_SETTINGS,
   WORKSPACE_SETTINGS,
@@ -385,24 +386,26 @@ function Sidebar({
         ) : project ? (
           <>
             <NavLink page={OVERVIEW} href={base} pathname={pathname} exact onNavigate={onNavigate} />
-            <SidebarGroup label="Replay">
-              {PROJECT_PAGES.map((page) => (
-                <NavLink
-                  key={page.key}
-                  page={page}
-                  href={`${base}${page.href}`}
-                  pathname={pathname}
-                  onNavigate={onNavigate}
-                  badge={
-                    page.key === 'live' && liveCount > 0 ? (
-                      <Tag tone="brand" dot>
-                        {liveCount}
-                      </Tag>
-                    ) : undefined
-                  }
-                />
-              ))}
-            </SidebarGroup>
+            {PROJECT_GROUPS.map((group) => (
+              <SidebarGroup key={group.label} label={group.label}>
+                {PROJECT_PAGES.filter((page) => group.keys.includes(page.key)).map((page) => (
+                  <NavLink
+                    key={page.key}
+                    page={page}
+                    href={`${base}${page.href}`}
+                    pathname={pathname}
+                    onNavigate={onNavigate}
+                    badge={
+                      page.key === 'live' && liveCount > 0 ? (
+                        <Tag tone="brand" dot>
+                          {liveCount}
+                        </Tag>
+                      ) : undefined
+                    }
+                  />
+                ))}
+              </SidebarGroup>
+            ))}
           </>
         ) : (
           <>

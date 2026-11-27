@@ -1,14 +1,19 @@
 import {
+  ArrowUpDown,
+  Bookmark,
   ChevronLeft,
   ChevronRight,
   Clock,
   Flame,
   Monitor,
   PlayCircle,
+  Plus,
   Search,
   Smartphone,
   Tablet,
+  Trash2,
   TriangleAlert,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -21,21 +26,30 @@ import {
   useRecordings,
   visitorLabel,
 } from '@/api/app';
+import { errorMessage } from '@/api/http';
+import { type Preferences, usePreferences, useSavePreferences } from '@/api/settings';
 import { ago, compact, duration } from '@/lib/format';
 import { useProjectScope } from '@/shell/AppFrame';
 import { ErrorNote, SkeletonRows } from '@/shell/states';
 import {
   Avatar,
+  Button,
   cn,
+  ConfirmDialog,
+  Dialog,
   EmptyState,
+  Field,
   IconButton,
   Input,
   LinkButton,
+  Menu,
+  type MenuAction,
   Page,
   PageHeader,
   Select,
   Tabs,
   Tag,
+  toast,
   Tooltip,
 } from '@/ui';
 
@@ -48,6 +62,93 @@ const DEVICES: DeviceFilter[] = ['any', 'Desktop', 'Mobile', 'Tablet'];
 
 const oneOf = <T extends string>(options: readonly T[], value: string | null, fallback: T) =>
   options.find((option) => option === value) ?? fallback;
+
+/**
+ * Filters the analytics pages link here with. They have no control in the
+ * bar: each one shows as a chip that can be removed.
+ */
+const EXTRA_KEYS = [
+  'entry',
+  'exit',
+  'path',
+  'referrer',
+  'channel',
+  'utmSource',
+  'utmCampaign',
+  'country',
+  'browser',
+  'os',
+  'language',
+  'release',
+  'event',
+  'eventPath',
+] as const;
+type ExtraKey = (typeof EXTRA_KEYS)[number];
+type Sort = 'newest' | 'score';
+
+/** The list request: `useRecordings` sends every key of it as a query parameter. */
+type ListFilters = RecordingFilters & Partial<Record<ExtraKey, string>> & { sort?: 'score' };
+
+const EXTRA_LABEL: Record<ExtraKey, string> = {
+  entry: 'Entry page',
+  exit: 'Exit page',
+  path: 'Page',
+  referrer: 'Source',
+  channel: 'Channel',
+  utmSource: 'UTM source',
+  utmCampaign: 'Campaign',
+  country: 'Country',
+  browser: 'Browser',
+  os: 'OS',
+  language: 'Language',
+  release: 'Release',
+  event: 'Event',
+  eventPath: 'Event page',
+};
+
+const EVENT_LABEL: Record<string, string> = {
+  error: 'Error',
+  rage: 'Rage click',
+  dead: 'Dead click',
+  track: 'Event',
+  request: 'Request',
+};
+
+/** "Entry page" and "/pricing" for `entry=/pricing`; "Error" and "3f2a91c0…" for `event=error:3f2a91c0…`. */
+function chip(key: ExtraKey, value: string): [label: string, value: string] {
+  if (key !== 'event') return [EXTRA_LABEL[key], value];
+  const colon = value.indexOf(':');
+  const label = EVENT_LABEL[value.slice(0, colon)];
+  if (!label) return ['Event', value];
+  const rest = value.slice(colon + 1);
+  return [label, label === 'Error' && rest.length > 8 ? `${rest.slice(0, 8)}…` : rest];
+}
+
+const parseExtra = (params: URLSearchParams) => {
+  const extra: Partial<Record<ExtraKey, string>> = {};
+  for (const key of EXTRA_KEYS) {
+    const value = params.get(key);
+    if (value) extra[key] = value;
+  }
+  return extra;
+};
+
+interface SavedView {
+  name: string;
+  /** The list's query string, without the page. */
+  query: string;
+}
+
+/** Preferences are stored whole and free-form; saved views live under their own key, by project. */
+type ViewPreferences = Preferences & { savedViews?: Record<string, SavedView[]> };
+
+/** The query string a view is saved and compared as. */
+function viewQuery(params: URLSearchParams) {
+  const out = new URLSearchParams(params);
+  out.delete('page');
+  out.sort();
+  return out.toString();
+}
 
 const parseFilters = (params: URLSearchParams): RecordingFilters => ({
   view: oneOf(VIEWS, params.get('view'), 'all'),
@@ -83,7 +184,20 @@ function useFilterParams() {
       ),
     [setParams],
   );
-  return [parseFilters(params), update] as const;
+  /** Rewrites the query string and goes back to the first page. */
+  const rewrite = useCallback(
+    (change: (out: URLSearchParams) => URLSearchParams | void) =>
+      setParams(
+        (current) => {
+          const out = new URLSearchParams(current);
+          out.delete('page');
+          return change(out) ?? out;
+        },
+        { replace: true },
+      ),
+    [setParams],
+  );
+  return { params, filters: parseFilters(params), update, rewrite };
 }
 
 function Toggle({
@@ -117,8 +231,61 @@ function Toggle({
 
 export function Recordings() {
   const current = useProjectScope();
-  const [filters, update] = useFilterParams();
-  const list = useRecordings(current.id, filters, { refetchInterval: 10_000 });
+  const { params, filters, update, rewrite } = useFilterParams();
+  const extra = parseExtra(params);
+  const chips = EXTRA_KEYS.filter((key) => extra[key] !== undefined);
+  const sort: Sort = params.get('sort') === 'score' ? 'score' : 'newest';
+  const request: ListFilters = { ...filters, ...extra, sort: sort === 'score' ? 'score' : undefined };
+  const list = useRecordings(current.id, request, { refetchInterval: 10_000 });
+
+  const preferences = usePreferences();
+  const savePreferences = useSavePreferences();
+  const stored = preferences.data as ViewPreferences | undefined;
+  const views = stored?.savedViews?.[current.id] ?? [];
+  const here = viewQuery(params);
+  const [naming, setNaming] = useState(false);
+  const [viewName, setViewName] = useState('');
+  const [forgetting, setForgetting] = useState<SavedView | null>(null);
+
+  const storeViews = (next: SavedView[], done: string) => {
+    if (!stored) return;
+    const all: ViewPreferences = {
+      ...stored,
+      savedViews: { ...stored.savedViews, [current.id]: next },
+    };
+    savePreferences.mutate(all, {
+      onSuccess: () => toast(done),
+      onError: (error) => toast(errorMessage(error)),
+    });
+  };
+  const closeNaming = () => {
+    setNaming(false);
+    setViewName('');
+  };
+  const saveView = () => {
+    const name = viewName.trim();
+    if (!name || !stored) return;
+    storeViews([...views.filter((view) => view.name !== name), { name, query: here }], 'View saved');
+    closeNaming();
+  };
+  const savedActions: MenuAction[] = [
+    { id: 'save', label: 'Save this view…', icon: Plus, onSelect: () => setNaming(true) },
+    ...views.map((view, index) => ({
+      id: `open:${view.name}`,
+      label: view.name,
+      separated: index === 0,
+      selected: view.query === here,
+      onSelect: () => rewrite(() => new URLSearchParams(view.query)),
+    })),
+    ...views.map((view, index) => ({
+      id: `delete:${view.name}`,
+      label: `Delete ${view.name}`,
+      icon: Trash2,
+      tone: 'danger' as const,
+      separated: index === 0,
+      onSelect: () => setForgetting(view),
+    })),
+  ];
   const data = list.data;
   const host = current.origin.replace(/^https?:\/\//, '');
 
@@ -223,7 +390,65 @@ export function Recordings() {
         <Toggle on={filters.errors} onChange={(errors) => update({ errors })} icon={TriangleAlert}>
           Errors
         </Toggle>
+        <Select
+          label="Sort"
+          value={sort}
+          onChange={(next) =>
+            rewrite((out) => {
+              if (next === 'score') out.set('sort', 'score');
+              else out.delete('sort');
+            })
+          }
+          icon={ArrowUpDown}
+          className="h-9 w-44"
+          options={[
+            { value: 'newest', label: 'Newest first' },
+            { value: 'score', label: 'Worth watching' },
+          ]}
+        />
+        <Menu
+          align="end"
+          actions={savedActions}
+          trigger={
+            <Button size="lg" icon={Bookmark} className="px-2.5">
+              Saved
+            </Button>
+          }
+        />
       </div>
+
+      {chips.length > 0 ? (
+        <div className="-mt-2 mb-4 flex flex-wrap items-center gap-1.5">
+          {chips.map((key) => {
+            const [label, value] = chip(key, extra[key] ?? '');
+            return (
+              <Tag key={key} className="max-w-full gap-0.5 pr-0">
+                <span className="truncate">
+                  {label}: <span className="text-fg-secondary">{value}</span>
+                </span>
+                <IconButton
+                  icon={X}
+                  label={`Remove ${label.toLowerCase()} filter`}
+                  onClick={() => rewrite((out) => out.delete(key))}
+                  className="size-5! rounded-[5px] [&_svg]:size-3"
+                />
+              </Tag>
+            );
+          })}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5! px-1.5 text-hint"
+            onClick={() =>
+              rewrite((out) => {
+                for (const key of EXTRA_KEYS) out.delete(key);
+              })
+            }
+          >
+            Clear
+          </Button>
+        </div>
+      ) : null}
 
       <div className="overflow-hidden rounded-xl border border-line bg-surface">
         <div className="flex h-[38px] items-center gap-6 border-b border-line-subtle px-4 text-label text-fg-meta">
@@ -345,6 +570,58 @@ export function Recordings() {
           </span>
         </div>
       </div>
+
+      <Dialog
+        open={naming}
+        onOpenChange={(open) => {
+          if (open) setNaming(true);
+          else closeNaming();
+        }}
+        title="Save this view"
+        description="The filters and sort as they are now, kept under a name only you see."
+        footer={
+          <>
+            <Button onClick={closeNaming}>Cancel</Button>
+            <Button
+              variant="primary"
+              disabled={viewName.trim().length === 0 || !stored}
+              onClick={saveView}
+            >
+              Save view
+            </Button>
+          </>
+        }
+      >
+        <Field label="Name">
+          <Input
+            autoFocus
+            placeholder="Checkout errors on mobile"
+            value={viewName}
+            onChange={(event) => setViewName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') saveView();
+            }}
+          />
+        </Field>
+      </Dialog>
+
+      <ConfirmDialog
+        open={forgetting !== null}
+        onOpenChange={(open) => {
+          if (!open) setForgetting(null);
+        }}
+        title={forgetting ? `Delete ${forgetting.name}?` : 'Delete view?'}
+        description="The saved view is removed. No recording is deleted."
+        confirmLabel="Delete view"
+        danger
+        onConfirm={() => {
+          if (!forgetting) return;
+          storeViews(
+            views.filter((view) => view.name !== forgetting.name),
+            'View deleted',
+          );
+        }}
+      />
     </Page>
   );
 }

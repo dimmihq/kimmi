@@ -22,6 +22,7 @@ export type ActivityKind =
   | 'rage'
   | 'dead'
   | 'error'
+  | 'track'
   | 'idle';
 
 export interface ActivityEntry {
@@ -225,6 +226,30 @@ class NodeIndex {
 
 const LEVELS = new Set(['log', 'info', 'warn', 'error']);
 
+/** What the events the SDK sends on its own are called in the list. */
+const AUTO_EVENTS: Record<string, string> = {
+  $outbound: 'Outbound link',
+  $download: 'Download',
+  $email: 'Email link',
+  $phone: 'Phone link',
+  $form: 'Form submitted',
+};
+const PROPS_MAX = 80;
+
+/** A tracked event's name as the list shows it. */
+export const trackLabel = (name: string) => AUTO_EVENTS[name] ?? (name || 'Event');
+
+/** A tracked event's props on one line: `plan: pro, seats: 3`. */
+function propsSummary(props: Record<string, unknown>) {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(props)) {
+    if (value === null || value === undefined || value === '') continue;
+    parts.push(`${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`);
+  }
+  const line = parts.join(', ');
+  return line.length > PROPS_MAX ? `${line.slice(0, PROPS_MAX - 1)}…` : line;
+}
+
 const pathOf = (href: string) => {
   try {
     const url = new URL(href);
@@ -316,6 +341,14 @@ export function derive(events: readonly RawEvent[]): Derived {
             kind: 'error',
             label: text(payload.message) || 'Error',
             detail: text(payload.source) || undefined,
+          });
+          break;
+        case 'track':
+          activity.push({
+            t,
+            kind: 'track',
+            label: trackLabel(text(payload.name)),
+            detail: propsSummary(record(payload.props)) || undefined,
           });
           break;
         case 'rage-click': {

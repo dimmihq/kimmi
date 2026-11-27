@@ -7,6 +7,7 @@ import {
   useRecordings,
   visitorLabel,
 } from '@/api/app';
+import { type Days, recordingsHref, useReleases } from '@/api/analytics';
 import type { Project, Recording } from '@/api/types';
 import { ago, bytes, compact, duration, flag } from '@/lib/format';
 import { ProjectTile, useProjectScope } from '@/shell/AppFrame';
@@ -170,15 +171,21 @@ function Share({
   share,
   detail,
   mono,
+  to,
 }: {
   label: string;
   value: string;
   share: number;
   detail?: string;
   mono?: boolean;
+  /** The recordings this row counts. */
+  to: string;
 }) {
   return (
-    <div className="relative flex items-center gap-3 px-4 py-2">
+    <Link
+      to={to}
+      className="relative flex items-center gap-3 px-4 py-2 transition-colors duration-75 hover:bg-hover"
+    >
       <span
         className="absolute inset-y-1 left-2 rounded-md bg-selected"
         style={{ width: `calc(${share * 100}% - 16px)` }}
@@ -188,7 +195,7 @@ function Share({
       </span>
       {detail ? <span className="relative text-hint text-warning-fg">{detail}</span> : null}
       <span className="tabular relative w-12 text-right text-control text-fg">{value}</span>
-    </div>
+    </Link>
   );
 }
 
@@ -216,7 +223,100 @@ function ShareSkeleton({ rows }: { rows: number }) {
   );
 }
 
+const quietLink = 'text-control text-fg-muted hover:text-fg';
+
+/** The unwatched recordings with the most going on: errors, rage clicks, long visits. */
 function WorthWatching({ current, base }: { current: Project; base: string }) {
+  const list = useRecordings(current.id, {
+    ...DEFAULT_RECORDING_FILTERS,
+    view: 'unwatched',
+    limit: 5,
+    extra: { sort: 'score' },
+  });
+  const items = list.data?.items;
+  return (
+    <Panel className="overflow-hidden">
+      <PanelHeader
+        title="Worth watching"
+        description="Unwatched recordings, the most eventful first"
+        action={
+          <Link to={recordingsHref(current.id, { sort: 'score' })} className={quietLink}>
+            All
+          </Link>
+        }
+      />
+      {list.isPending ? (
+        <div className="border-t border-line-subtle">
+          <SkeletonRows count={5} />
+        </div>
+      ) : !items ? (
+        <ErrorNote
+          className="border-t border-line-subtle"
+          error={list.error}
+          onRetry={() => void list.refetch()}
+        />
+      ) : items.length === 0 ? (
+        <p className="border-t border-line-subtle px-4 py-10 text-center text-body text-fg-meta">
+          Nothing unwatched needs your attention.
+        </p>
+      ) : (
+        items.map((entry) => <WatchRow key={entry.id} entry={entry} base={base} />)
+      )}
+    </Panel>
+  );
+}
+
+/** Each release seen in the window, with how its sessions went. Hidden until one is sent. */
+function Releases({ projectId, days }: { projectId: string; days: Days }) {
+  const releases = useReleases(projectId, days).data ?? [];
+  if (releases.length === 0) return null;
+  return (
+    <Panel className="overflow-hidden">
+      <PanelHeader title="Releases" description="Sessions, errors and friction by release" />
+      <div className="flex h-[38px] items-center gap-4 border-t border-line-subtle px-4 text-label text-fg-meta">
+        <span className="min-w-0 flex-1">Release</span>
+        <span className="w-16 text-right">Sessions</span>
+        <span className="w-14 text-right">Errors</span>
+        <span className="w-14 text-right">Friction</span>
+      </div>
+      {releases.map((entry) => (
+        <Link
+          key={entry.release}
+          to={recordingsHref(projectId, { release: entry.release })}
+          className="flex items-center gap-4 border-t border-line-subtle px-4 py-2.5 transition-colors duration-75 hover:bg-hover"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-mono text-fg">{entry.release}</span>
+            <span className="block truncate text-hint text-fg-meta">
+              first seen {ago(entry.firstSeen)}
+            </span>
+          </span>
+          <span className="tabular w-16 text-right text-control text-fg">
+            {compact(entry.sessions)}
+          </span>
+          <span
+            className={cn(
+              'tabular w-14 text-right text-hint',
+              entry.errors > 0 ? 'text-danger-fg' : 'text-fg-meta',
+            )}
+          >
+            {percent(entry.errors, entry.sessions)}
+          </span>
+          <span
+            className={cn(
+              'tabular w-14 text-right text-hint',
+              entry.friction > 0 ? 'text-warning-fg' : 'text-fg-meta',
+            )}
+          >
+            {percent(entry.friction, entry.sessions)}
+          </span>
+        </Link>
+      ))}
+    </Panel>
+  );
+}
+
+function RecentRecordings({ current, base }: { current: Project; base: string }) {
   const [watch, setWatch] = useState<Watch>('latest');
   const list = useRecordings(current.id, {
     ...DEFAULT_RECORDING_FILTERS,
@@ -228,8 +328,8 @@ function WorthWatching({ current, base }: { current: Project; base: string }) {
   return (
     <Panel className="overflow-hidden">
       <PanelHeader
-        title="Worth watching"
-        description="Where to look first"
+        title="Recent recordings"
+        description="The latest sessions, or only those with trouble"
         action={
           <Segmented
             label="Which recordings"
@@ -413,11 +513,22 @@ export function Overview() {
       )}
 
       <div className="mt-3 grid gap-3 xl:grid-cols-[1.5fr_1fr]">
-        <WorthWatching current={current} base={base} />
+        <div className="grid content-start gap-3">
+          <WorthWatching current={current} base={base} />
+          <RecentRecordings current={current} base={base} />
+        </div>
 
         <div className="grid content-start gap-3">
           <Panel className="pb-2">
-            <PanelHeader title="Top pages" description="Page views and rage clicks in recordings" />
+            <PanelHeader
+              title="Top pages"
+              description="Page views and rage clicks in recordings"
+              action={
+                <Link to={`${base}/friction`} className={quietLink}>
+                  Friction by page
+                </Link>
+              }
+            />
             {data ? (
               pages.map((page) => (
                 <Share
@@ -427,6 +538,7 @@ export function Overview() {
                   share={page.views / topViews}
                   value={compact(page.views)}
                   detail={page.rage > 0 ? `${page.rage} rage` : undefined}
+                  to={recordingsHref(current.id, { path: page.path })}
                 />
               ))
             ) : (
@@ -443,6 +555,7 @@ export function Overview() {
                     label={entry.name}
                     share={entry.count / Math.max(1, devices[0].count)}
                     value={`${Math.round((entry.count / Math.max(1, data.totals.recordings)) * 100)}%`}
+                    to={recordingsHref(current.id, { device: entry.name })}
                   />
                 ))
               ) : (
@@ -458,6 +571,7 @@ export function Overview() {
                     label={`${flag(entry.code)} ${entry.name}`}
                     share={entry.count / Math.max(1, countries[0].count)}
                     value={`${Math.round((entry.count / Math.max(1, data.totals.recordings)) * 100)}%`}
+                    to={recordingsHref(current.id, { country: entry.code })}
                   />
                 ))
               ) : (
@@ -465,6 +579,7 @@ export function Overview() {
               )}
             </div>
           </Panel>
+          <Releases projectId={current.id} days={Number(range) as Days} />
         </div>
       </div>
     </Page>

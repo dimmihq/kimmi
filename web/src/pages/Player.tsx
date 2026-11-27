@@ -2,39 +2,17 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  CircleSlash,
   FileX,
-  FastForward,
-  Flame,
-  Globe,
-  Keyboard,
   Link2,
-  Lock,
-  type LucideIcon,
   Maximize2,
+  MessageSquare,
   Minimize2,
-  Moon,
   MoreHorizontal,
-  MousePointerClick,
-  MoveVertical,
-  Pause,
-  Play,
-  RotateCcw,
-  RotateCw,
+  Share2,
   Star,
   Trash2,
-  TriangleAlert,
 } from 'lucide-react';
-import { type eventWithTime, Replayer } from 'rrweb';
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { type ReactNode, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   isNotFound,
@@ -44,156 +22,45 @@ import {
   useUpdateRecording,
   visitorLabel,
 } from '@/api/app';
+import { type Note, useCreateNote, useCreateShare, useDeleteNote, useNotes } from '@/api/analytics';
 import { errorMessage } from '@/api/http';
+import { useMe } from '@/api/queries';
+import { canManage, useProjectSettings } from '@/api/settings';
 import type { Project, RecordingDetail } from '@/api/types';
-import { bytes, clock, duration, flag } from '@/lib/format';
+import { ago, bytes, clock, day, duration, flag } from '@/lib/format';
+import { type ActivityEntry, derive, urlAt } from '@/replay/derive';
 import {
-  type ActivityEntry,
-  type ActivityKind,
-  type Derived,
-  derive,
-  urlAt,
-} from '@/replay/derive';
+  KIND,
+  ReplayAddress,
+  ReplayControls,
+  ReplayStage,
+  splitUrl,
+  useReplay,
+} from '@/replay/stage';
 import { useProjectScope, useTrail } from '@/shell/AppFrame';
-import { ErrorNote, Skeleton } from '@/shell/states';
+import { ErrorNote, FormError, Skeleton } from '@/shell/states';
 import {
+  Button,
   cn,
+  CodeBlock,
   ConfirmDialog,
+  Dialog,
+  EmptyState,
+  Field,
   IconButton,
+  Input,
+  LinkButton,
   Menu,
+  Page,
   Segmented,
   Select,
-  Switch,
-  EmptyState,
-  LinkButton,
-  Page,
+  SwitchField,
   Tag,
   toast,
   Tooltip,
 } from '@/ui';
 
-const KIND: Record<ActivityKind, { icon: LucideIcon; tone: string; mark: string }> = {
-  navigate: { icon: Globe, tone: 'text-info-fg', mark: 'bg-info' },
-  click: { icon: MousePointerClick, tone: 'text-fg-muted', mark: 'bg-fg-ghost' },
-  input: { icon: Keyboard, tone: 'text-fg-muted', mark: 'bg-fg-ghost' },
-  scroll: { icon: MoveVertical, tone: 'text-fg-meta', mark: 'bg-fg-ghost' },
-  rage: { icon: Flame, tone: 'text-warning-fg', mark: 'bg-warning' },
-  dead: { icon: CircleSlash, tone: 'text-warning-fg', mark: 'bg-warning' },
-  error: { icon: TriangleAlert, tone: 'text-danger-fg', mark: 'bg-danger' },
-  idle: { icon: Moon, tone: 'text-fg-ghost', mark: 'bg-fg-ghost' },
-};
-
-type Speed = '1' | '2' | '4' | '8';
-type InspectorTab = 'activity' | 'console' | 'network' | 'details';
-
-/** Used until the recording's own Meta event says how big the page was. */
-const FALLBACK_VIEWPORT = { width: 1280, height: 800 };
-
-/** "1440 × 900" as numbers. */
-function parseViewport(value: string) {
-  const [width, height] = value.split('×').map((part) => Number.parseInt(part, 10));
-  return width > 0 && height > 0 ? { width, height } : null;
-}
-
-/** The address bar's host and path for a URL. */
-function splitUrl(href: string | null, fallbackHost: string, fallbackPath: string) {
-  if (!href) return { host: fallbackHost, path: fallbackPath };
-  try {
-    const url = new URL(href);
-    return { host: url.host, path: `${url.pathname}${url.search}` };
-  } catch {
-    return { host: fallbackHost, path: href };
-  }
-}
-
-/* ---------------------------------------------------------------- Timeline */
-
-function Timeline({
-  data,
-  time,
-  onSeek,
-}: {
-  data: Pick<Derived, 'durationMs' | 'activity' | 'inactive'>;
-  time: number;
-  onSeek: (ms: number) => void;
-}) {
-  const track = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState<number | null>(null);
-  const total = Math.max(1, data.durationMs);
-  const at = (clientX: number) => {
-    const rect = track.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * total;
-  };
-  const percent = (ms: number) => `${(ms / total) * 100}%`;
-  const marks = data.activity.filter((entry) => entry.kind !== 'idle' && entry.kind !== 'scroll');
-
-  return (
-    <div
-      ref={track}
-      role="slider"
-      tabIndex={0}
-      aria-label="Seek"
-      aria-valuemin={0}
-      aria-valuemax={Math.round(total / 1000)}
-      aria-valuenow={Math.round(time / 1000)}
-      aria-valuetext={duration(time)}
-      className="group relative h-9 cursor-pointer touch-none select-none outline-offset-4"
-      onPointerDown={(event) => {
-        event.currentTarget.setPointerCapture(event.pointerId);
-        onSeek(at(event.clientX));
-      }}
-      onPointerMove={(event) => {
-        setHover(at(event.clientX));
-        if (event.buttons === 1) onSeek(at(event.clientX));
-      }}
-      onPointerLeave={() => setHover(null)}
-      onKeyDown={(event) => {
-        if (event.key === 'ArrowRight') onSeek(Math.min(total, time + 5000));
-        if (event.key === 'ArrowLeft') onSeek(Math.max(0, time - 5000));
-      }}
-    >
-      <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-active">
-        {data.inactive.map((range) => (
-          <span
-            key={range.start}
-            className="hatch absolute inset-y-0 bg-canvas"
-            style={{ left: percent(range.start), width: percent(range.end - range.start) }}
-          />
-        ))}
-        <span className="absolute inset-y-0 left-0 bg-brand" style={{ width: percent(time) }} />
-      </div>
-      {marks.map((entry, index) => {
-        const loud = entry.kind === 'rage' || entry.kind === 'error' || entry.kind === 'dead';
-        return (
-          <span
-            // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list
-            key={index}
-            className={cn(
-              'absolute -translate-x-1/2 rounded-full',
-              KIND[entry.kind].mark,
-              loud ? 'top-0.5 h-2.5 w-[3px]' : 'bottom-1 size-[3px] opacity-70',
-              entry.kind === 'navigate' && 'bottom-0.5 h-2 w-0.5 opacity-100',
-            )}
-            style={{ left: percent(entry.t) }}
-          />
-        );
-      })}
-      <span
-        className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-panel bg-fg shadow-raised transition-transform group-hover:scale-110"
-        style={{ left: percent(time) }}
-      />
-      {hover !== null ? (
-        <span
-          className="pointer-events-none absolute -top-6 -translate-x-1/2 rounded-md border border-line-field bg-tooltip px-1.5 py-0.5 font-mono text-mono text-[oklch(0.96_0_0)]"
-          style={{ left: percent(hover) }}
-        >
-          {duration(hover)}
-        </span>
-      ) : null}
-    </div>
-  );
-}
+type InspectorTab = 'activity' | 'console' | 'network' | 'notes' | 'details';
 
 /* --------------------------------------------------------------- Inspector */
 
@@ -322,16 +189,274 @@ function PlayerSkeleton() {
           <div className="relative min-h-[240px] flex-1 bg-stage" />
           <div className="h-[84px] shrink-0 border-t border-line-subtle" />
         </div>
-        <aside className="max-h-[42vh] w-full shrink-0 border-t border-line bg-aside lg:max-h-none lg:w-[360px] lg:border-l lg:border-t-0" />
+        <aside className="max-h-[42vh] w-full shrink-0 border-t border-line bg-aside lg:max-h-none lg:w-[400px] lg:border-l lg:border-t-0" />
       </div>
     </div>
   );
 }
 
-/** The middle of the stage when there is nothing to play yet. */
-function StageNote({ children }: { children: ReactNode }) {
+/* ------------------------------------------------------------------- Notes */
+
+function NoteList({
+  projectId,
+  recordingId,
+  notes,
+  time,
+  onSeek,
+  canDelete,
+}: {
+  projectId: string;
+  recordingId: string;
+  notes: Note[];
+  time: number;
+  onSeek: (ms: number) => void;
+  canDelete: boolean;
+}) {
+  const remove = useDeleteNote(projectId, recordingId);
+  const [deleting, setDeleting] = useState<Note | null>(null);
+  const sorted = useMemo(() => [...notes].sort((a, b) => a.atMs - b.atMs), [notes]);
   return (
-    <div className="absolute inset-0 flex items-center justify-center p-6">{children}</div>
+    <>
+      <ol className="p-1.5">
+        {sorted.map((note) => (
+          <li
+            key={note.id}
+            className={cn(
+              'flex items-start rounded-md transition-colors duration-75 hover:bg-hover',
+              note.atMs > time + 50 && 'opacity-55',
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => onSeek(note.atMs)}
+              className="flex min-w-0 flex-1 items-start gap-2.5 rounded-md px-2 py-1.5 text-left"
+            >
+              <span className="tabular mt-px w-9 shrink-0 font-mono text-mono text-fg-meta">
+                {duration(note.atMs)}
+              </span>
+              <MessageSquare className="mt-0.5 size-3.5 shrink-0 text-fg-muted" strokeWidth={2} />
+              <span className="min-w-0 flex-1">
+                <span className="block break-words text-control text-fg-secondary">
+                  {note.body}
+                </span>
+                <span className="block truncate text-hint text-fg-meta">
+                  {note.author} · {ago(note.createdAt)}
+                </span>
+              </span>
+            </button>
+            {canDelete ? (
+              <IconButton
+                icon={Trash2}
+                label="Delete note"
+                onClick={() => setDeleting(note)}
+                className="mr-0.5 mt-0.5"
+              />
+            ) : null}
+          </li>
+        ))}
+      </ol>
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+        title="Delete this note?"
+        description="The note is removed for everyone on the project. This cannot be undone."
+        confirmLabel="Delete note"
+        danger
+        onConfirm={() => {
+          if (!deleting) return;
+          remove.mutate(deleting.id, {
+            onSuccess: () => toast('Note deleted'),
+            onError: (error) => toast(errorMessage(error)),
+          });
+        }}
+      />
+    </>
+  );
+}
+
+/** One line at the foot of the Notes tab: Enter adds a note at the current moment. */
+function NoteInput({
+  projectId,
+  recordingId,
+  time,
+}: {
+  projectId: string;
+  recordingId: string;
+  time: number;
+}) {
+  const create = useCreateNote(projectId, recordingId);
+  const [draft, setDraft] = useState('');
+  const label = `Add a note at ${duration(time)}`;
+  return (
+    <div className="shrink-0 border-t border-line-subtle px-3.5 py-2.5">
+      <Input
+        aria-label={label}
+        placeholder={label}
+        value={draft}
+        disabled={create.isPending}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          const body = draft.trim();
+          if (event.key !== 'Enter' || !body || create.isPending) return;
+          create.mutate(
+            { atMs: Math.round(time), body },
+            {
+              onSuccess: () => setDraft(''),
+              onError: (error) => toast(errorMessage(error)),
+            },
+          );
+        }}
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------- Share */
+
+type Expiry = '1' | '7' | '30';
+
+/** Creates a public link to this recording; the link is shown once. */
+function ShareDialog({
+  projectId,
+  recordingId,
+  open,
+  at,
+  admin,
+  onClose,
+}: {
+  projectId: string;
+  recordingId: string;
+  open: boolean;
+  /** The playback time when the dialog was opened. */
+  at: number;
+  admin: boolean;
+  onClose: () => void;
+}) {
+  const settings = useProjectSettings(projectId);
+  const create = useCreateShare(projectId);
+  const [expiry, setExpiry] = useState<Expiry>('7');
+  /** Null until the switch is touched: on when the player is past the start. */
+  const [fromHere, setFromHere] = useState<boolean | null>(null);
+  const startHere = fromHere ?? at > 0;
+  const created = create.data;
+
+  const close = () => {
+    onClose();
+    setExpiry('7');
+    setFromHere(null);
+    create.reset();
+  };
+
+  const submit = () => {
+    if (create.isPending) return;
+    create.mutate({
+      kind: 'recording',
+      recordingId,
+      startMs: startHere ? Math.round(at) : 0,
+      expiresInDays: Number(expiry) as 1 | 7 | 30,
+    });
+  };
+
+  let title = 'Share this recording';
+  let description: ReactNode;
+  let body: ReactNode = null;
+  let footer: ReactNode = <Button onClick={close}>Close</Button>;
+
+  if (created) {
+    const link = created.link ?? '';
+    title = 'Link created';
+    description = 'Copy the link now. It is not shown again.';
+    body = (
+      <>
+        <CodeBlock
+          code={link.startsWith('/') ? `${window.location.origin}${link}` : link}
+          label={`Expires ${day(created.expiresAt)}`}
+        />
+        <p className="text-hint text-fg-meta">You can revoke it in Settings → Sharing.</p>
+      </>
+    );
+    footer = (
+      <Button variant="primary" onClick={close}>
+        Done
+      </Button>
+    );
+  } else if (settings.isPending) {
+    body = (
+      <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading">
+        <Skeleton className="h-3 w-56" />
+        <Skeleton className="h-8 w-full" />
+      </div>
+    );
+  } else if (settings.isError) {
+    body = <ErrorNote error={settings.error} onRetry={() => void settings.refetch()} className="py-4" />;
+  } else if (!settings.data.sharing.enabled) {
+    description = admin
+      ? 'Public links are off for this project.'
+      : 'Public links are off for this project. Ask an admin to turn on public links.';
+    if (admin) {
+      footer = (
+        <>
+          <Button onClick={close}>Cancel</Button>
+          <LinkButton variant="primary" to={`/projects/${projectId}/settings/sharing`}>
+            Sharing settings
+          </LinkButton>
+        </>
+      );
+    }
+  } else if (!admin) {
+    description = 'Only admins can create public links.';
+  } else {
+    body = (
+      <>
+        <Field label="Expires in">
+          <Select
+            block
+            label="Expires in"
+            value={expiry}
+            onChange={setExpiry}
+            options={[
+              { value: '1', label: '1 day' },
+              { value: '7', label: '7 days' },
+              { value: '30', label: '30 days' },
+            ]}
+          />
+        </Field>
+        <SwitchField
+          label={`Start at ${duration(at)}`}
+          checked={startHere}
+          onChange={setFromHere}
+        />
+        <p className="text-hint text-fg-meta">
+          Anyone with the link can watch this recording until it expires. Masked content stays
+          masked.
+        </p>
+        <FormError message={create.error ? errorMessage(create.error) : null} />
+      </>
+    );
+    footer = (
+      <>
+        <Button onClick={close}>Cancel</Button>
+        <Button variant="primary" disabled={create.isPending} onClick={submit}>
+          Create link
+        </Button>
+      </>
+    );
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) close();
+      }}
+      title={title}
+      description={description}
+      footer={footer}
+    >
+      {body}
+    </Dialog>
   );
 }
 
@@ -346,176 +471,34 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
   const update = useUpdateRecording(project.id, entry.id);
   const remove = useDeleteRecording(project.id);
 
-  const stage = useRef<HTMLDivElement>(null);
-  const root = useRef<HTMLDivElement>(null);
-  const replayer = useRef<Replayer | null>(null);
-  /** How many of `events` the Replayer has been given. */
-  const fed = useRef(0);
-  /** Playback reached the end of a live recording and waits for more. */
-  const atLiveEdge = useRef(false);
-  // What the Replayer's callbacks read: always the latest render's values.
-  const latest = useRef({ events, data, live });
-  useLayoutEffect(() => {
-    latest.current = { events, data, live };
-  });
-  const markedSeen = useRef(entry.seen);
+  const role = useMe().data?.user.role;
+  const canWrite = role !== undefined && role !== 'viewer';
+  const notes = useNotes(project.id, entry.id);
+  const noteTimes = useMemo(() => (notes.data ?? []).map((note) => note.atMs), [notes.data]);
 
-  const [time, setTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState<Speed>('1');
-  const [skip, setSkip] = useState(true);
+  const markedSeen = useRef(entry.seen);
+  const replay = useReplay({
+    events,
+    data,
+    live,
+    startMs: Number(new URLSearchParams(window.location.search).get('t') ?? 0) * 1000,
+    viewport: entry.viewport,
+    onPlay: () => {
+      if (markedSeen.current) return;
+      markedSeen.current = true;
+      update.mutate({ seen: true });
+    },
+  });
+  const { time, playing, seek } = replay;
+
   const [theater, setTheater] = useState(false);
   const [tab, setTab] = useState<InspectorTab>('activity');
   const [onlyErrors, setOnlyErrors] = useState<'all' | 'errors'>('all');
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [resized, setResized] = useState<{ width: number; height: number } | null>(null);
-  const { width, height } =
-    resized ?? data.viewport ?? parseViewport(entry.viewport) ?? FALLBACK_VIEWPORT;
-
-  const fit = useCallback(() => {
-    const box = stage.current;
-    const wrapper = root.current?.querySelector<HTMLElement>('.replayer-wrapper');
-    if (!box || !wrapper) return;
-    const scale = Math.min(box.clientWidth / width, box.clientHeight / height, 1);
-    wrapper.style.width = `${width}px`;
-    wrapper.style.height = `${height}px`;
-    wrapper.style.transform = `scale(${scale})`;
-    wrapper.style.left = `${(box.clientWidth - width * scale) / 2}px`;
-    wrapper.style.top = `${(box.clientHeight - height * scale) / 2}px`;
-  }, [width, height]);
-
-  // The Replayer is built once there is something to play, from the events so far.
-  useEffect(() => {
-    const mount = root.current;
-    const initial = latest.current.events;
-    if (!mount || !data.playable || !initial) return;
-    mount.innerHTML = '';
-    const player = new Replayer(initial as unknown as eventWithTime[], {
-      root: mount,
-      speed: 1,
-      skipInactive: true,
-      showWarning: false,
-      mouseTail: { duration: 500, lineWidth: 2, strokeStyle: 'oklch(0.91 0.18 127)' },
-    });
-    replayer.current = player;
-    fed.current = initial.length;
-    const total = latest.current.data.durationMs;
-    const requested = Number(new URLSearchParams(window.location.search).get('t') ?? 0) * 1000;
-    const start = Math.max(0, Math.min(total, requested || 0));
-    player.pause(start);
-    setTime(start);
-    setPlaying(false);
-    player.on('resize', (size) => {
-      const next = (size ?? {}) as { width?: number; height?: number };
-      if (next.width && next.height) setResized({ width: next.width, height: next.height });
-    });
-    player.on('finish', () => {
-      const end = latest.current.data.durationMs;
-      setTime(end);
-      if (latest.current.live) atLiveEdge.current = true;
-      else setPlaying(false);
-    });
-    return () => {
-      player.destroy();
-      mount.innerHTML = '';
-      replayer.current = null;
-      fed.current = 0;
-      atLiveEdge.current = false;
-    };
-  }, [data.playable]);
-
-  // A live recording grows: hand the new events over, and keep playing if we were at the end.
-  useEffect(() => {
-    const player = replayer.current;
-    if (!player || !events || events.length <= fed.current) return;
-    for (const event of events.slice(fed.current)) {
-      player.addEvent(event as unknown as eventWithTime);
-    }
-    fed.current = events.length;
-    if (atLiveEdge.current) {
-      atLiveEdge.current = false;
-      player.play(player.getCurrentTime());
-    }
-  }, [events]);
-
-  useEffect(() => {
-    fit();
-  }, [fit, data.playable]);
-
-  useEffect(() => {
-    const box = stage.current;
-    if (!box) return;
-    const observer = new ResizeObserver(fit);
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, [fit]);
-
-  useEffect(() => {
-    if (!playing) return;
-    let frame = 0;
-    const tick = () => {
-      const player = replayer.current;
-      if (player) {
-        setTime(Math.max(0, Math.min(latest.current.data.durationMs, player.getCurrentTime())));
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [playing]);
-
-  useEffect(() => {
-    replayer.current?.setConfig({ speed: Number(speed), skipInactive: skip });
-  }, [speed, skip, data.playable]);
-
-  const seek = useCallback(
-    (ms: number) => {
-      const to = Math.max(0, Math.min(data.durationMs - 1, ms));
-      atLiveEdge.current = false;
-      setTime(to);
-      if (playing) replayer.current?.play(to);
-      else replayer.current?.pause(to);
-    },
-    [data.durationMs, playing],
-  );
-
-  const toggle = useCallback(() => {
-    const player = replayer.current;
-    if (!player) return;
-    if (playing) {
-      atLiveEdge.current = false;
-      player.pause();
-      setPlaying(false);
-      return;
-    }
-    const from = time >= data.durationMs - 200 && !live ? 0 : time;
-    player.play(from);
-    setPlaying(true);
-    if (!markedSeen.current) {
-      markedSeen.current = true;
-      update.mutate({ seen: true });
-    }
-  }, [playing, time, data.durationMs, live, update]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement;
-      if (target.closest('input, textarea, button, [role="dialog"], [role="slider"]')) return;
-      if (event.metaKey || event.ctrlKey) return;
-      if (event.key === ' ') {
-        event.preventDefault();
-        toggle();
-      } else if (event.key === 'ArrowRight') seek(time + 5000);
-      else if (event.key === 'ArrowLeft') seek(time - 5000);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [toggle, seek, time]);
+  const [share, setShare] = useState({ open: false, at: 0 });
 
   const fallbackHost = project.origin.replace(/^https?:\/\//, '');
   const address = splitUrl(urlAt(data, time), fallbackHost, entry.entry);
-  const skipping =
-    playing && skip && data.inactive.some((range) => time >= range.start && time < range.end);
   const logs =
     onlyErrors === 'errors' ? data.console.filter((item) => item.level === 'error') : data.console;
   const errorCount = data.console.filter((item) => item.level === 'error').length;
@@ -579,6 +562,11 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
             toast(`Link copied at ${duration(time)}`);
           }}
         />
+        <IconButton
+          icon={Share2}
+          label="Share"
+          onClick={() => setShare({ open: true, at: time })}
+        />
         <div className="mx-0.5 h-4 w-px bg-line max-sm:hidden" />
         <IconButton
           icon={ChevronLeft}
@@ -625,112 +613,36 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line-subtle px-3.5">
-            <Lock className="size-3 text-fg-ghost" />
-            <span className="min-w-0 flex-1 truncate font-mono text-mono text-fg-muted">
-              {address.host}
-              <span className="text-fg">{address.path}</span>
-            </span>
-            <span className="tabular font-mono text-mono text-fg-ghost">{entry.viewport}</span>
-          </div>
-          <div ref={stage} className="relative min-h-[240px] flex-1 overflow-hidden bg-stage">
-            <div ref={root} className="absolute inset-0" />
-            {stream.isPending ? null : !stream.data ? (
-              <StageNote>
-                <ErrorNote error={stream.error} onRetry={() => void stream.refetch()} />
-              </StageNote>
-            ) : !data.playable ? (
-              <StageNote>
-                {live ? (
-                  <p role="status" className="flex items-center gap-2 text-control text-fg-meta">
-                    <span className="size-1.5 animate-pulse-dot rounded-full bg-brand" />
-                    Waiting for the first events
-                  </p>
-                ) : (
-                  <p className="text-body text-fg-meta">
-                    This session ended before anything could be recorded.
-                  </p>
-                )}
-              </StageNote>
-            ) : null}
-            {skipping ? (
-              <div className="pointer-events-none absolute left-1/2 top-4 flex -translate-x-1/2 animate-swap-in items-center gap-2 rounded-full border border-line-field bg-tooltip px-3 py-1.5 text-control text-[oklch(0.96_0_0)] shadow-overlay">
-                <FastForward className="size-3.5 text-brand" />
-                Skipping inactivity
-              </div>
-            ) : null}
-            {data.playable && !playing && time === 0 ? (
-              <button
-                type="button"
-                aria-label="Play recording"
-                onClick={toggle}
-                className="absolute left-1/2 top-1/2 flex size-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-brand text-brand-ink shadow-dialog transition-transform hover:scale-105"
-              >
-                <Play className="ml-1 size-7 fill-current" />
-              </button>
-            ) : null}
-          </div>
-
-          <div className="shrink-0 border-t border-line-subtle px-4 pb-3 pt-2">
-            <Timeline data={data} time={time} onSeek={seek} />
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-2">
-              <Tooltip label={playing ? 'Pause (space)' : 'Play (space)'}>
-                <button
-                  type="button"
-                  aria-label={playing ? 'Pause' : 'Play'}
-                  onClick={toggle}
-                  disabled={!data.playable}
-                  className="flex size-8 items-center justify-center rounded-full bg-brand text-brand-ink transition-colors hover:bg-brand-hover"
-                >
-                  {playing ? (
-                    <Pause className="size-3.5 fill-current" />
-                  ) : (
-                    <Play className="ml-0.5 size-3.5 fill-current" />
-                  )}
-                </button>
-              </Tooltip>
-              <IconButton icon={RotateCcw} label="Back 10 s" onClick={() => seek(time - 10_000)} />
-              <IconButton icon={RotateCw} label="Forward 10 s" onClick={() => seek(time + 10_000)} />
-              <span className="tabular ml-1 font-mono text-mono text-fg-secondary">
-                {duration(time)}
-                <span className="text-fg-ghost"> / {duration(data.durationMs)}</span>
-              </span>
-              <div className="flex-1" />
-              <div className="flex items-center gap-2 text-control text-fg-muted">
-                <Switch checked={skip} onChange={setSkip} label="Skip inactivity" />
-                <span className="max-sm:hidden">Skip inactivity</span>
-              </div>
-              <Select
-                label="Playback speed"
-                size="sm"
-                value={speed}
-                onChange={setSpeed}
-                className="w-[72px]"
-                options={[
-                  { value: '1', label: '1×' },
-                  { value: '2', label: '2×' },
-                  { value: '4', label: '4×' },
-                  { value: '8', label: '8×' },
-                ]}
-              />
+          <ReplayAddress host={address.host} path={address.path} viewport={entry.viewport} />
+          <ReplayStage
+            replay={replay}
+            pending={stream.isPending}
+            error={stream.data ? null : stream.error}
+            onRetry={() => void stream.refetch()}
+          />
+          <ReplayControls
+            replay={replay}
+            notes={noteTimes}
+            trailing={
               <IconButton
                 icon={theater ? Minimize2 : Maximize2}
                 label={theater ? 'Show inspector' : 'Hide inspector'}
                 onClick={() => setTheater((value) => !value)}
                 className="max-lg:hidden"
               />
-            </div>
-          </div>
+            }
+          />
         </div>
 
         {theater ? null : (
-          <aside className="flex max-h-[42vh] w-full shrink-0 flex-col border-t border-line bg-aside lg:max-h-none lg:w-[360px] lg:border-l lg:border-t-0">
+          <aside className="flex max-h-[42vh] w-full shrink-0 flex-col border-t border-line bg-aside lg:max-h-none lg:w-[400px] lg:border-l lg:border-t-0">
             <div role="tablist" className="flex h-9 shrink-0 items-center gap-4 border-b border-line-subtle px-3.5">
               {(
                 [
                   ['activity', 'Activity', data.activity.length],
                   ['console', 'Console', data.console.length],
                   ['network', 'Network', data.network.length],
+                  ['notes', 'Notes', notes.data?.length || undefined],
                   ['details', 'Details', undefined],
                 ] as const
               ).map(([value, label, count]) => (
@@ -741,7 +653,7 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
                   aria-selected={tab === value}
                   onClick={() => setTab(value)}
                   className={cn(
-                    '-mb-px flex h-9 items-center gap-1.5 border-b-2 text-control transition-colors',
+                    '-mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 text-control transition-colors',
                     tab === value
                       ? 'border-brand text-fg'
                       : 'border-transparent text-fg-meta hover:text-fg-secondary',
@@ -853,6 +765,32 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
                 </ol>
               ) : null}
 
+              {tab === 'notes' ? (
+                notes.isPending ? (
+                  <div className="flex flex-col gap-3 px-3.5 py-3" aria-busy="true" aria-label="Loading">
+                    <Skeleton className="h-3 w-48" />
+                    <Skeleton className="h-3 w-36" />
+                  </div>
+                ) : notes.isError ? (
+                  <ErrorNote error={notes.error} onRetry={() => void notes.refetch()} />
+                ) : notes.data.length === 0 ? (
+                  <Empty>
+                    {canWrite
+                      ? 'No notes yet. Add one to point a teammate at a moment.'
+                      : 'Nobody has left a note on this recording.'}
+                  </Empty>
+                ) : (
+                  <NoteList
+                    projectId={project.id}
+                    recordingId={entry.id}
+                    notes={notes.data}
+                    time={time}
+                    onSeek={seek}
+                    canDelete={canWrite}
+                  />
+                )
+              ) : null}
+
               {tab === 'details' ? (
                 <div className="px-4 py-3">
                   <h3 className="mb-1 text-label text-fg-ghost">Session</h3>
@@ -896,9 +834,21 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
                 </div>
               ) : null}
             </div>
+            {tab === 'notes' && canWrite ? (
+              <NoteInput projectId={project.id} recordingId={entry.id} time={time} />
+            ) : null}
           </aside>
         )}
       </div>
+
+      <ShareDialog
+        projectId={project.id}
+        recordingId={entry.id}
+        open={share.open}
+        at={share.at}
+        admin={canManage(role)}
+        onClose={() => setShare((current) => ({ ...current, open: false }))}
+      />
 
       <ConfirmDialog
         open={confirmDelete}

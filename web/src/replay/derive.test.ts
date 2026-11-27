@@ -164,6 +164,33 @@ describe('derive', () => {
     ]);
   });
 
+  it('lists tracked events by name, with their props on one line', () => {
+    const { activity } = derive([
+      ...base(),
+      custom(100, 'track', { name: 'signup', props: { plan: 'pro', seats: 3, trial: false, coupon: '' } }),
+      custom(200, 'track', { name: 'checkout' }),
+      custom(300, 'track', { name: '$outbound', props: { url: 'https://docs.acme.dev/' } }),
+      custom(400, 'track', { name: '$download', props: { file: 'report.pdf' } }),
+      custom(500, 'track', { name: '$email' }),
+      custom(600, 'track', { name: '$phone' }),
+      custom(700, 'track', { name: '$form', props: { form: { id: 'newsletter' } } }),
+      custom(800, 'track', { name: 'long', props: { note: 'x'.repeat(200) } }),
+      custom(900, 'track', {}),
+    ]);
+    expect(activity.slice(0, 7)).toEqual([
+      { t: 100, kind: 'track', label: 'signup', detail: 'plan: pro, seats: 3, trial: false' },
+      { t: 200, kind: 'track', label: 'checkout', detail: undefined },
+      { t: 300, kind: 'track', label: 'Outbound link', detail: 'url: https://docs.acme.dev/' },
+      { t: 400, kind: 'track', label: 'Download', detail: 'file: report.pdf' },
+      { t: 500, kind: 'track', label: 'Email link', detail: undefined },
+      { t: 600, kind: 'track', label: 'Phone link', detail: undefined },
+      { t: 700, kind: 'track', label: 'Form submitted', detail: 'form: {"id":"newsletter"}' },
+    ]);
+    expect(activity[7].detail).toHaveLength(80);
+    expect(activity[7].detail?.endsWith('…')).toBe(true);
+    expect(activity[8]).toEqual({ t: 900, kind: 'track', label: 'Event', detail: undefined });
+  });
+
   it('marks gaps over 10 s without input as inactive, in time order', () => {
     const result = derive([
       ...base(),

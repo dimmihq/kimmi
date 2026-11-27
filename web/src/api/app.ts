@@ -50,6 +50,11 @@ export interface RecordingFilters {
   errors: boolean;
   page: number;
   limit: number;
+  /**
+   * More filters, sent as they are: `entry`, `exit`, `path`, `referrer`, `channel`, `utmSource`,
+   * `utmCampaign`, `country`, `browser`, `os`, `language`, `release`, `event`, `eventPath`, `sort`.
+   */
+  extra?: Record<string, string>;
 }
 
 export const DEFAULT_RECORDING_FILTERS: RecordingFilters = {
@@ -224,7 +229,7 @@ export function useRecordings(
   return useQuery({
     queryKey: appKeys.recordingList(projectId ?? '', filters),
     queryFn: () =>
-      api.get<RecordingList>(`/projects/${projectId}/recordings`, { ...filters }),
+      api.get<RecordingList>(`/projects/${projectId}/recordings`, { ...filters, extra: undefined, ...filters.extra }),
     enabled: Boolean(projectId) && (options.enabled ?? true),
     placeholderData: sameProject(projectId),
     refetchInterval: options.refetchInterval,

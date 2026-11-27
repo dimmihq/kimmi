@@ -116,10 +116,62 @@ export interface CaptureSettings {
   urlRules: UrlRule[];
 }
 
+/** A goal or funnel step: a page (a path, or a prefix ending in `*`) or a tracked event's name. */
+export interface StepSetting {
+  kind: 'page' | 'event';
+  value: string;
+}
+
+export interface GoalSetting extends StepSetting {
+  /** Leave empty for a new goal; the server names it. */
+  id: string;
+  name: string;
+}
+
+export interface FunnelSetting {
+  id: string;
+  name: string;
+  /** 2 to 6 steps. */
+  steps: StepSetting[];
+}
+
+export interface AnalyticsSettings {
+  enabled: boolean;
+  /** Count visits without storing anything in the browser; recording then waits for consent. */
+  cookieless: boolean;
+  /** Outbound links, downloads, email and phone links, form submissions. */
+  autoEvents: boolean;
+  heatmaps: boolean;
+  retentionDays: 30 | 90 | 365 | 730;
+  /** At most 20. Send the whole list to change it. */
+  goals: GoalSetting[];
+  /** At most 10. Send the whole list to change it. */
+  funnels: FunnelSetting[];
+}
+
+export interface AlertSettings {
+  /** Empty: nothing is sent. Reads `hidden` for people who are not admins. */
+  webhookUrl: string;
+  /** Signs deliveries when set. */
+  secret: string;
+  newErrors: boolean;
+  /** Errors in an hour; 0 is off. */
+  errorSpike: number;
+  /** Rage clicks in an hour; 0 is off. */
+  rageSpike: number;
+  noTraffic: boolean;
+  feedback: boolean;
+  weeklyDigest: boolean;
+}
+
 export interface ProjectSettings {
   privacy: PrivacySettings;
   capture: CaptureSettings;
   retention: { days: 7 | 30 | 90 | 365; keepStarred: boolean };
+  analytics: AnalyticsSettings;
+  feedback: { widget: boolean };
+  alerts: AlertSettings;
+  sharing: { enabled: boolean };
 }
 
 export interface ProjectMember {

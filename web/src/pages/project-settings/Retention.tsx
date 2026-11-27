@@ -1,6 +1,6 @@
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useProject } from '@/api/queries';
 import {
   useDeleteRecordings,
@@ -94,38 +94,50 @@ export function Retention() {
           onRetry={() => void settings.refetch()}
         />
       ) : (
-        <SettingSection title="Retention" description="Applies to existing recordings too.">
-          <SettingRow
-            title="Keep recordings for"
-            description={`Older recordings are deleted at the nightly cleanup.${stored ? ` This project stores ${stored}.` : ''}`}
-          >
-            <Loaded value={retention}>
-              {(current) => (
-                <Select
-                  block
-                  label="Keep recordings for"
-                  value={String(current.days) as `${Days}`}
-                  onChange={(next) => save({ days: Number(next) as Days })}
-                  options={PERIODS}
-                />
-              )}
-            </Loaded>
-          </SettingRow>
-          <SettingRow
-            title="Keep starred recordings"
-            description="Starred recordings are kept until someone removes the star."
-          >
-            <Loaded value={retention} kind="switch">
-              {(current) => (
-                <Switch
-                  label="Keep starred recordings"
-                  checked={current.keepStarred}
-                  onChange={(keepStarred) => save({ keepStarred })}
-                />
-              )}
-            </Loaded>
-          </SettingRow>
-        </SettingSection>
+        <>
+          <SettingSection title="Retention" description="Applies to existing recordings too.">
+            <SettingRow
+              title="Keep recordings for"
+              description={`Older recordings are deleted at the nightly cleanup.${stored ? ` This project stores ${stored}.` : ''}`}
+            >
+              <Loaded value={retention}>
+                {(current) => (
+                  <Select
+                    block
+                    label="Keep recordings for"
+                    value={String(current.days) as `${Days}`}
+                    onChange={(next) => save({ days: Number(next) as Days })}
+                    options={PERIODS}
+                  />
+                )}
+              </Loaded>
+            </SettingRow>
+            <SettingRow
+              title="Keep starred recordings"
+              description="Starred recordings are kept until someone removes the star."
+            >
+              <Loaded value={retention} kind="switch">
+                {(current) => (
+                  <Switch
+                    label="Keep starred recordings"
+                    checked={current.keepStarred}
+                    onChange={(keepStarred) => save({ keepStarred })}
+                  />
+                )}
+              </Loaded>
+            </SettingRow>
+          </SettingSection>
+          <p className="mt-3 text-meta text-fg-meta">
+            Visit counts and events are kept separately: see{' '}
+            <Link
+              to={`/projects/${projectId}/settings/analytics`}
+              className="text-fg-secondary underline underline-offset-2 hover:text-fg"
+            >
+              Analytics
+            </Link>
+            .
+          </p>
+        </>
       )}
 
       <SettingSection title="Delete data" description="Deleted recordings cannot be restored.">

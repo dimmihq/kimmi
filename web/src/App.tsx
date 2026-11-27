@@ -1,19 +1,31 @@
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { useMe } from './api/queries';
+import { Analytics } from './pages/Analytics';
+import { ErrorDetail } from './pages/ErrorDetail';
+import { Errors } from './pages/Errors';
+import { Feedback } from './pages/Feedback';
+import { Friction } from './pages/Friction';
+import { Funnels } from './pages/Funnels';
+import { Heatmaps } from './pages/Heatmaps';
 import { Invite } from './pages/Invite';
 import { Live } from './pages/Live';
 import { Login } from './pages/Login';
 import { NewProject } from './pages/NewProject';
 import { Overview } from './pages/Overview';
+import { Performance } from './pages/Performance';
 import { Player } from './pages/Player';
 import { Projects } from './pages/Projects';
+import { AlertSettings } from './pages/project-settings/Alerts';
+import { AnalyticsSettings } from './pages/project-settings/Analytics';
 import { Capture } from './pages/project-settings/Capture';
 import { General } from './pages/project-settings/General';
 import { Install } from './pages/project-settings/Install';
 import { ProjectMembers } from './pages/project-settings/Members';
 import { Privacy } from './pages/project-settings/Privacy';
 import { Retention } from './pages/project-settings/Retention';
+import { SharingSettings } from './pages/project-settings/Sharing';
 import { Recordings } from './pages/Recordings';
+import { Shared } from './pages/Shared';
 import { Signup } from './pages/Signup';
 import { Instance } from './pages/settings/Instance';
 import { Preferences } from './pages/settings/Preferences';
@@ -65,6 +77,7 @@ export function App() {
           <Route path="/signup" element={<Signup />} />
         </Route>
         <Route path="/invite/:token" element={<Invite />} />
+        <Route path="/shared/:token" element={<Shared />} />
         <Route element={<SignedIn />}>
           <Route element={<AppFrame />}>
             <Route path="/" element={<Navigate to="/projects" replace />} />
@@ -74,6 +87,14 @@ export function App() {
               <Route index element={<Overview />} />
               <Route path="recordings" element={<Recordings />} />
               <Route path="recordings/:recordingId" element={<Player />} />
+              <Route path="analytics" element={<Analytics />} />
+              <Route path="funnels" element={<Funnels />} />
+              <Route path="heatmaps" element={<Heatmaps />} />
+              <Route path="errors" element={<Errors />} />
+              <Route path="errors/:fingerprint" element={<ErrorDetail />} />
+              <Route path="friction" element={<Friction />} />
+              <Route path="performance" element={<Performance />} />
+              <Route path="feedback" element={<Feedback />} />
               <Route path="live" element={<Live />} />
               <Route path="visitors" element={<Visitors />} />
               <Route path="visitors/:visitorId" element={<VisitorDetail />} />
@@ -82,6 +103,9 @@ export function App() {
               <Route path="settings/install" element={<Install />} />
               <Route path="settings/privacy" element={<Privacy />} />
               <Route path="settings/capture" element={<Capture />} />
+              <Route path="settings/analytics" element={<AnalyticsSettings />} />
+              <Route path="settings/alerts" element={<AlertSettings />} />
+              <Route path="settings/sharing" element={<SharingSettings />} />
               <Route path="settings/retention" element={<Retention />} />
               <Route path="settings/members" element={<ProjectMembers />} />
             </Route>

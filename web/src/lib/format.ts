@@ -59,6 +59,45 @@ export const flag = (code: string) =>
     ? String.fromCodePoint(...[...code.toUpperCase()].map((char) => 0x1f1a5 + char.charCodeAt(0)))
     : '';
 
+/** "2026-11-27" as "27 Nov", in the viewer's locale. */
+export const shortDay = (date: string) =>
+  new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+/** A part of a whole as "12.3%". */
+export const rate = (part: number, whole: number) =>
+  `${whole > 0 ? ((part / whole) * 100).toFixed(1) : '0.0'}%`;
+
+/** The change from `previous` to `current` in percent; null when there is nothing to compare with. */
+export const change = (current: number, previous: number) =>
+  previous > 0 && Number.isFinite(current) ? ((current - previous) / previous) * 100 : null;
+
+/** A change in percent as "+4.2%". */
+export const signed = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+
+const displayNames = (type: 'region' | 'language') => {
+  try {
+    return new Intl.DisplayNames(undefined, { type });
+  } catch {
+    return null;
+  }
+};
+const REGIONS = displayNames('region');
+const LANGUAGES = displayNames('language');
+
+const named = (names: Intl.DisplayNames | null, code: string) => {
+  try {
+    return names?.of(code) ?? code;
+  } catch {
+    return code;
+  }
+};
+
+/** A country code as the country's name: "DE" is "Germany". */
+export const countryName = (code: string) => (code ? named(REGIONS, code.toUpperCase()) : 'Unknown');
+
+/** A language tag as the language's name: "pt-BR" is "Brazilian Portuguese". */
+export const languageName = (tag: string) => (tag ? named(LANGUAGES, tag) : 'Unknown');
+
 export const PLATFORM_LABEL = {
   react: 'React',
   next: 'Next.js',

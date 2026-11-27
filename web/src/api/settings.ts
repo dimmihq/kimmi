@@ -125,6 +125,8 @@ export interface Preferences {
   skipInactivity: boolean;
   autoplayNext: boolean;
   mouseTrail: boolean;
+  /** Saved views of the recordings list, per project: a name and the list's query string. */
+  savedViews?: Record<string, { name: string; query: string }[]>;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -362,6 +364,10 @@ const mergeSettings = (current: ProjectSettings, patch: SettingsPatch): ProjectS
   privacy: { ...current.privacy, ...patch.privacy },
   capture: { ...current.capture, ...patch.capture },
   retention: { ...current.retention, ...patch.retention },
+  analytics: { ...current.analytics, ...patch.analytics },
+  feedback: { ...current.feedback, ...patch.feedback },
+  alerts: { ...current.alerts, ...patch.alerts },
+  sharing: { ...current.sharing, ...patch.sharing },
 });
 
 export function useUpdateProjectSettings(projectId: string) {
