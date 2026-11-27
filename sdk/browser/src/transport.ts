@@ -20,7 +20,7 @@ export class Transport {
 
   constructor(
     private readonly url: string,
-    private readonly fetchFn: typeof fetch,
+    readonly fetchFn: typeof fetch,
     private readonly onHalt: () => void,
     private readonly retryBaseMs = 1000,
   ) {}

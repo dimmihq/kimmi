@@ -7,7 +7,7 @@ export interface InitOptions {
   release?: string;
   /**
    * Your own scrubbing, run after the built-in rules on every recorded string outside the DOM:
-   * console output, network URLs and bodies, errors, navigations and click text. It must not throw.
+   * console output, network URLs and bodies, errors, navigations, click text and analytics hits. It must not throw.
    */
   scrub?: (text: string) => string;
 }
@@ -63,11 +63,65 @@ export interface CaptureConfig {
   urlRules: UrlRule[];
 }
 
+export interface AnalyticsConfig {
+  enabled: boolean;
+  /** Nothing is kept in the browser's storage; the recorder then waits for `optIn()`. */
+  cookieless: boolean;
+  /** Outbound links, downloads, email and phone links, and form submits become events. */
+  autoEvents: boolean;
+  /** Every click is sent with its position. */
+  heatmaps: boolean;
+}
+
+export interface FeedbackConfig {
+  /** Show the feedback button without a `showFeedback()` call. */
+  widget: boolean;
+}
+
 export interface RemoteConfig {
   recording: boolean;
   sampleRate: number;
   privacy: PrivacyConfig;
   capture: CaptureConfig;
+  analytics: AnalyticsConfig;
+  feedback: FeedbackConfig;
+}
+
+/** One analytics event inside a hit. Keys that do not apply are left out. */
+export interface HitEvent {
+  /** Timestamp, ms. */
+  t: number;
+  /** Kind: page, leave, click, track, error, rage, dead, request or vital. */
+  k: string;
+  /** Path of the page it happened on. */
+  p?: string;
+  n?: string | undefined;
+  l?: string | undefined;
+  v?: number | undefined;
+  x?: number | undefined;
+  y?: number | undefined;
+  w?: number | undefined;
+  num?: number | undefined;
+  d?: Record<string, unknown> | undefined;
+}
+
+export interface Hit {
+  v: 1;
+  visitId: string;
+  anonymousId: string;
+  startedAt: number;
+  url: string;
+  landing: string;
+  referrer: string;
+  viewport: { w: number; h: number };
+  language: string;
+  timezone: string;
+  release?: string;
+  events: HitEvent[];
+}
+
+export interface FeedbackOptions {
+  email?: string;
 }
 
 export interface BatchCounts {
@@ -126,6 +180,7 @@ export interface CustomEventPayloads {
   'rage-click': { selector: string; text: string; count: number };
   'dead-click': { selector: string; text: string };
   identify: { id: string; email?: string; name?: string };
+  track: { name: string; props: Record<string, unknown> };
 }
 
 export type CustomTag = keyof CustomEventPayloads;

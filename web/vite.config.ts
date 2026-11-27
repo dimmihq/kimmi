@@ -11,6 +11,6 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   server: {
-    proxy: { '/api': server, '/i': server, '/kimmi.js': server },
+    proxy: { '/api': server, '/i': server, '/kimmi.js': server, '/kimmi-feedback.js': server },
   },
 });

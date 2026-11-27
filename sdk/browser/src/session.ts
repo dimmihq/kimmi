@@ -6,6 +6,9 @@ export interface Session {
   seq: number;
   startedAt: number;
   lastActivity: number;
+  /** Where the visit began, for analytics. Sessions stored by an older SDK do not have them. */
+  landing?: string;
+  referrer?: string;
 }
 
 const SESSION_KEY = 'kimmi.session';
@@ -21,7 +24,7 @@ export function isExpired(session: Session, limits: SessionLimits, now: number):
 }
 
 export function newSession(windowId: string, now: number): Session {
-  return { id: uuidv7(now), windowId, seq: 0, startedAt: now, lastActivity: now };
+  return { id: uuidv7(now), windowId, seq: 0, startedAt: now, lastActivity: now, landing: location.href, referrer: document.referrer };
 }
 
 function loadSession(): Session | null {

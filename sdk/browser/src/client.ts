@@ -1,6 +1,7 @@
 import { record } from 'rrweb';
 import type { eventWithTime } from '@rrweb/types';
-import { installCapture } from './capture';
+import { pageContext, startAnalytics, type Analytics } from './analytics';
+import { installCapture, installConsole, type CaptureSink } from './capture';
 import { fetchConfig } from './config';
 import { sanitizeDomEvent, type DomPrivacy } from './dom-privacy';
 import { FrustrationDetector, elementText, selectorFor } from './frustration';
@@ -13,6 +14,7 @@ import type {
   BatchMeta,
   CustomEventPayloads,
   CustomTag,
+  FeedbackOptions,
   Identity,
   InitOptions,
   RecordedEvent,
@@ -20,7 +22,7 @@ import type {
   Traits,
 } from './types';
 import { urlAllowed } from './url-rules';
-import { readStorage, safe, writeStorage } from './util';
+import { listen as addListener, readStorage, safe, writeStorage } from './util';
 
 const FLUSH_INTERVAL_MS = 2000;
 const CHECKOUT_MS = 5 * 60_000;
@@ -31,6 +33,7 @@ const MAX_BATCH_CHARS = 4 * 1024 * 1024;
 const MUTATION_STORM = 10_000;
 const MOUSEMOVE_THROTTLE_MS = 250;
 const EARLY_EVENT_LIMIT = 100;
+const EARLY_TRACK_LIMIT = 50;
 
 const CONSENT_KEY = 'kimmi.consent';
 const IDENTITY_KEY = 'kimmi.identity';
@@ -106,6 +109,12 @@ export class Kimmi {
   private navigatePending = false;
   private teardowns: Array<() => void> = [];
   private captureTeardown: (() => void) | null = null;
+  private consoleTeardown: (() => void) | null = null;
+  private analytics: Analytics | null = null;
+  /** `track` calls from before analytics started; null once it is known whether it will. */
+  private earlyTracks: Array<[name: string, props: unknown, at: number]> | null = [];
+  /** The feedback button: 0 not asked for, 1 wanted once analytics runs, 2 loaded. */
+  private widget = 0;
   /** Console, network and error events from before the first snapshot, replayed right after it. */
   private early: Array<{ tag: CustomTag; payload: unknown }> | null = null;
   private detector: FrustrationDetector | null = null;
@@ -130,23 +139,47 @@ export class Kimmi {
     if (this.options || !options?.key || !options.host) return;
     this.options = { ...options, host: options.host.replace(/\/+$/, '') };
     const nativeFetch = window.fetch.bind(window);
-    this.anonymousId = anonymousId();
-    this.identity = loadIdentity();
+    this.identity ??= loadIdentity();
     const { host, key } = this.options;
-    this.transport = new Transport(`${host}/i/v1/batch?key=${encodeURIComponent(key)}`, nativeFetch, () =>
-      this.halt(),
-    );
+    this.transport = new Transport(this.endpoint('batch'), nativeFetch, () => this.halt());
     this.early = [];
-    this.installCapture();
+    this.installCapture(true);
     fetchConfig(nativeFetch, host, key)
       .then((config) => {
-        if (config?.recording) {
+        if (config) {
           this.config = config;
+          this.preparePrivacy(config);
+          this.saveIdentity();
           this.start();
-        }
+          this.startAnalytics();
+        } else this.earlyTracks = null;
         if (!this.running) this.dropCapture();
       })
-      .catch(() => this.dropCapture());
+      .catch(() => {
+        this.earlyTracks = null;
+        this.dropCapture();
+      });
+  }
+
+  private endpoint(path: string): string {
+    const { host, key } = this.options!;
+    return `${host}/i/v1/${path}?key=${encodeURIComponent(key)}`;
+  }
+
+  /** The visitor's id, created in localStorage the first time something that may store it needs it. */
+  private visitorId(): string {
+    return (this.anonymousId ||= anonymousId());
+  }
+
+  private consent(): string | null {
+    return readStorage('localStorage', CONSENT_KEY);
+  }
+
+  private saveIdentity(): void {
+    const config = this.config;
+    // Not before the config arrives: a cookieless project keeps the identity in memory until optIn().
+    if (!this.identity || !config || (config.analytics.cookieless && this.consent() !== 'granted')) return;
+    writeStorage('localStorage', IDENTITY_KEY, JSON.stringify(this.identity));
   }
 
   identify(id: string, traits: Traits = {}): void {
@@ -158,21 +191,54 @@ export class Kimmi {
       ...(typeof name === 'string' ? { name } : {}),
     };
     this.identity = { ...payload, traits: rest };
-    writeStorage('localStorage', IDENTITY_KEY, JSON.stringify(this.identity));
+    this.saveIdentity();
     this.emitCustom('identify', payload);
+  }
+
+  track(name: string, props?: Record<string, unknown>): void {
+    const clean = String(name || '').trim().slice(0, 64);
+    if (!clean) return;
+    const analytics = this.analytics;
+    if (analytics && analytics.active) analytics.track(clean, props);
+    else if (this.earlyTracks && this.earlyTracks.length < EARLY_TRACK_LIMIT) {
+      this.earlyTracks.push([clean, props, Date.now()]);
+    }
+    this.emitCustom('track', { name: clean, props: props || {} });
+  }
+
+  feedback(text: string, options?: FeedbackOptions): void {
+    if (this.analytics && typeof text === 'string') this.analytics.feedback(text, options && options.email);
+  }
+
+  showFeedback(): void {
+    if (this.widget > 1) return;
+    this.widget = 1;
+    if (!this.analytics || !this.analytics.active) return;
+    this.widget = 2;
+    (window as Window & { __kimmiFeedback?: unknown }).__kimmiFeedback = {
+      send: safe((text: string, email?: string) => this.feedback(text, { email })),
+      labels: {},
+    };
+    const script = document.createElement('script');
+    script.src = `${this.options!.host}/kimmi-feedback.js`;
+    (document.head || document.documentElement).appendChild(script);
   }
 
   optIn(): void {
     writeStorage('localStorage', CONSENT_KEY, 'granted');
+    this.saveIdentity();
     this.start();
+    this.startAnalytics();
   }
 
   optOut(): void {
     writeStorage('localStorage', CONSENT_KEY, 'denied');
+    this.stopAnalytics(false);
     this.shutdown(false);
   }
 
   stop(): void {
+    this.stopAnalytics(true);
     this.shutdown(true);
   }
 
@@ -182,10 +248,11 @@ export class Kimmi {
 
   private start(): void {
     const config = this.config;
-    if (!config || this.running) return;
-    const consent = readStorage('localStorage', CONSENT_KEY);
+    if (!config?.recording || this.running) return;
+    const consent = this.consent();
     if (consent === 'denied') return;
-    if (config.privacy.requireConsent && consent !== 'granted') return;
+    // A cookieless project stores nothing unasked, and a recording needs storage: it waits for optIn() too.
+    if ((config.privacy.requireConsent || config.analytics.cookieless) && consent !== 'granted') return;
     if (config.privacy.respectDnt && doNotTrack()) return;
 
     const session = resumeSession(config.capture, Date.now());
@@ -195,10 +262,55 @@ export class Kimmi {
     this.session = session;
     this.running = true;
     this.waitingForError = config.capture.startOnError;
-    this.preparePrivacy(config);
-    this.installCapture();
+    this.installCapture(true);
     this.installListeners(config);
     if (urlAllowed(config.capture.urlRules, location.href)) this.startRecorder();
+  }
+
+  /**
+   * Analytics runs on its own terms: sampling, URL rules and the minimum duration do not apply to it.
+   * A recording gives it its identity; without one a cookieless project keeps the visit in memory, and
+   * any other project needs consent to store it (see `resolve` in analytics.ts).
+   */
+  private startAnalytics(): void {
+    const config = this.config;
+    if (!config || this.analytics) return;
+    if (!config.analytics.enabled || this.consent() === 'denied' || (config.privacy.respectDnt && doNotTrack())) {
+      this.earlyTracks = null;
+      return;
+    }
+    // With no recording and no cookieless mode the visit lives in storage, which may need optIn() first:
+    // early track calls are kept for it. (A visitor who opted out never gets this far.)
+    if (!this.running && !config.analytics.cookieless && config.privacy.requireConsent && this.consent() !== 'granted') return;
+    this.installCapture(false);
+    this.analytics = startAnalytics(
+      {
+        endpoint: (path) => this.endpoint(path),
+        release: this.options!.release,
+        // The page's own fetch, from before it was patched.
+        fetch: this.transport!.fetchFn,
+        scrub: () => this.scrubbing(),
+        session: () => (this.running ? this.session : null),
+        anonymousId: () => this.visitorId(),
+        maskSelector: () => this.textMaskSelector,
+        title: () => this.title(),
+        refused: () => {
+          if (!this.running) this.dropCapture();
+        },
+      },
+      config,
+    );
+    const analytics = this.analytics;
+    (this.earlyTracks || []).forEach((call) => analytics.track(...call));
+    this.earlyTracks = null;
+    if (config.feedback.widget || this.widget) this.showFeedback();
+  }
+
+  private stopAnalytics(send: boolean): void {
+    this.analytics?.stop(send);
+    // Gone, not just stopped, so a later optIn() can start it again. A refusal by the server keeps it.
+    this.analytics = null;
+    this.earlyTracks = null;
   }
 
   private preparePrivacy(config: RemoteConfig): void {
@@ -235,34 +347,44 @@ export class Kimmi {
     }
   }
 
-  private installCapture(): void {
-    if (this.captureTeardown) return;
-    this.captureTeardown = installCapture(
-      {
-        console: (payload) => this.emitCustom('console', payload),
-        network: (payload) => this.emitCustom('network', payload),
-        error: (payload) => this.onError(payload),
-        navigate: () => this.onNavigate(),
-        request: () => this.detector?.reaction(),
-        isOwnUrl: (url) => url.startsWith(`${this.options?.host}/i/`),
+  /** Errors, navigations and requests feed the recording and analytics; the console only the recording. */
+  private installCapture(withConsole: boolean): void {
+    const sink: CaptureSink = {
+      console: (payload) => this.emitCustom('console', payload),
+      network: (payload) => {
+        this.emitCustom('network', payload);
+        this.analytics?.request(payload);
       },
-      { bodies: () => this.config?.capture.networkBodies === true },
-    );
+      error: (payload) => {
+        this.onError(payload);
+        this.analytics?.error(payload);
+      },
+      navigate: () => {
+        this.onNavigate();
+        this.analytics?.navigate();
+      },
+      request: () => this.detector?.reaction(),
+      isOwnUrl: (url) => url.startsWith(`${this.options?.host}/i/`),
+    };
+    this.captureTeardown ??= installCapture(sink, { bodies: () => this.config?.capture.networkBodies === true });
+    if (withConsole) this.consoleTeardown ??= installConsole(sink);
   }
 
+  /** Removes the patches nothing needs any more: all of them, or only the console's while analytics runs. */
   private dropCapture(): void {
+    this.consoleTeardown?.();
+    this.consoleTeardown = null;
+    this.early = null;
+    if (this.analytics?.active) return;
     this.captureTeardown?.();
     this.captureTeardown = null;
-    this.early = null;
   }
 
   private installListeners(config: RemoteConfig): void {
     const { capture } = config;
 
     const listen = <K extends keyof WindowEventMap>(type: K, handler: (event: WindowEventMap[K]) => void) => {
-      const guarded = safe(handler);
-      window.addEventListener(type, guarded, { capture: true, passive: true });
-      this.teardowns.push(() => window.removeEventListener(type, guarded, { capture: true }));
+      this.teardowns.push(addListener(window, type, handler));
     };
     const active = () => this.onActivity(Date.now(), false);
     listen('mousemove', () => {
@@ -285,7 +407,9 @@ export class Kimmi {
 
     if (capture.frustration) {
       listen('click', (event) => {
-        if (this.recording && event.target instanceof Element) this.detector?.click(event.target, Date.now());
+        if (this.recording && event.target instanceof Element && !event.target.closest('[data-kimmi-own]')) {
+          this.detector?.click(event.target, Date.now());
+        }
       });
     }
 
@@ -304,8 +428,14 @@ export class Kimmi {
     this.lastHref = '';
     if (capture.frustration) {
       this.detector = new FrustrationDetector({
-        rage: (payload) => this.emitCustom('rage-click', payload),
-        dead: (payload) => this.emitCustom('dead-click', payload),
+        rage: (payload) => {
+          this.emitCustom('rage-click', payload);
+          this.analytics?.frustration('rage', payload);
+        },
+        dead: (payload) => {
+          this.emitCustom('dead-click', payload);
+          this.analytics?.frustration('dead', payload);
+        },
         describe: (el) => ({ selector: selectorFor(el), text: elementText(el, this.textMaskSelector) }),
       });
     }
@@ -408,18 +538,22 @@ export class Kimmi {
   private emitNavigate(): void {
     this.lastHref = location.href;
     this.detector?.reaction();
-    let title = document.title;
-    try {
-      if (document.querySelector('title')?.closest(this.textMaskSelector)) title = title.replace(/\S/g, '*');
-    } catch {
-      title = '';
-    }
-    this.emitCustom('navigate', { href: location.href, path: location.pathname, title });
+    this.emitCustom('navigate', { href: location.href, path: location.pathname, title: this.title() });
     const early = this.early;
     this.early = null;
     for (const { tag, payload } of early ?? []) {
       if (tag === 'error') this.onError(payload as CustomEventPayloads['error']);
       else this.emitCustom(tag, payload as never);
+    }
+  }
+
+  /** The document title, masked when the page's text is. */
+  private title(): string {
+    try {
+      const masked = document.querySelector('title')?.closest(this.textMaskSelector);
+      return masked ? document.title.replace(/\S/g, '*') : document.title;
+    } catch {
+      return '';
     }
   }
 
@@ -588,18 +722,14 @@ export class Kimmi {
       sessionId: session.id,
       windowId: session.windowId,
       seq: session.seq,
-      anonymousId: this.anonymousId,
+      anonymousId: this.visitorId(),
       ...(this.identity ? { identity: this.identity } : {}),
       startedAt: session.startedAt,
       firstTs,
       lastTs,
-      url: scrubUrl(location.href, scrub),
       path: scrubUrl(location.pathname, scrub),
       referrer: document.referrer && scrubUrl(document.referrer, scrub),
-      viewport: { w: window.innerWidth, h: window.innerHeight },
-      language: navigator.language,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      ...(this.options?.release ? { release: this.options.release } : {}),
+      ...pageContext(scrub, this.options?.release),
       counts,
       paths: [...paths],
     };

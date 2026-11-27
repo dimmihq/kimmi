@@ -1,5 +1,5 @@
 import { Kimmi } from './client';
-import type { InitOptions, Traits } from './types';
+import type { FeedbackOptions, InitOptions, Traits } from './types';
 import { safe } from './util';
 
 let instance: Kimmi | null = null;
@@ -25,6 +25,15 @@ export const optOut = safe((): void => client()?.optOut());
 /** Stops recording on this page after sending what is buffered. */
 export const stop = safe((): void => client()?.stop());
 
+/** Sends a custom analytics event. Props named like a secret are redacted, and props over 1 KB are dropped. */
+export const track = safe((name: string, props?: Record<string, unknown>): void => client()?.track(name, props));
+
+/** Sends a visitor's feedback to the dashboard. Does nothing while analytics is off. */
+export const feedback = safe((text: string, options?: FeedbackOptions): void => client()?.feedback(text, options));
+
+/** Loads the feedback button and shows it. */
+export const showFeedback = safe((): void => client()?.showFeedback());
+
 /** The id of the session being recorded, or null when nothing is recorded. */
 export function getSessionId(): string | null {
   try {
@@ -41,17 +50,25 @@ export interface KimmiApi {
   optOut(): void;
   stop(): void;
   getSessionId(): string | null;
+  track(name: string, props?: Record<string, unknown>): void;
+  feedback(text: string, options?: FeedbackOptions): void;
+  showFeedback(): void;
 }
 
-const kimmi: KimmiApi = { init, identify, optIn, optOut, stop, getSessionId };
+const kimmi: KimmiApi = { init, identify, optIn, optOut, stop, getSessionId, track, feedback, showFeedback };
 
 export default kimmi;
 export type {
+  AnalyticsConfig,
   BatchCounts,
   BatchMeta,
   CaptureConfig,
   CustomEventPayloads,
   CustomTag,
+  FeedbackConfig,
+  FeedbackOptions,
+  Hit,
+  HitEvent,
   Identity,
   InitOptions,
   PrivacyConfig,

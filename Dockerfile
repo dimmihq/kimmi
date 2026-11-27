@@ -20,6 +20,7 @@ COPY cmd cmd
 COPY internal internal
 COPY --from=web /src/web/dist internal/webui/dist
 COPY --from=web /src/sdk/browser/dist/kimmi.js internal/webui/dist/kimmi.js
+COPY --from=web /src/sdk/browser/dist/kimmi-feedback.js internal/webui/dist/kimmi-feedback.js
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG VERSION=dev

@@ -231,12 +231,21 @@ function captureHistory(sink: CaptureSink): Teardown[] {
   ];
 }
 
-/** Patches the page's console, fetch, XHR, History API and error handlers. Returns a function that undoes it. */
-export function installCapture(sink: CaptureSink, options: CaptureOptions): Teardown {
-  const teardowns: Teardown[] = [captureErrors(sink), ...captureHistory(sink), ...captureConsole(sink)];
-  if (typeof window.fetch === 'function') teardowns.push(captureFetch(sink, options.bodies));
-  if (typeof XMLHttpRequest !== 'undefined') teardowns.push(...captureXhr(sink, options.bodies));
+function all(teardowns: Teardown[]): Teardown {
   return () => {
     for (const teardown of teardowns) teardown();
   };
+}
+
+/** Patches the page's console. Apart from the rest: only the recorder wants console output. */
+export function installConsole(sink: CaptureSink): Teardown {
+  return all(captureConsole(sink));
+}
+
+/** Patches the page's fetch, XHR, History API and error handlers. Returns a function that undoes it. */
+export function installCapture(sink: CaptureSink, options: CaptureOptions): Teardown {
+  const teardowns: Teardown[] = [captureErrors(sink), ...captureHistory(sink)];
+  if (typeof window.fetch === 'function') teardowns.push(captureFetch(sink, options.bodies));
+  if (typeof XMLHttpRequest !== 'undefined') teardowns.push(...captureXhr(sink, options.bodies));
+  return all(teardowns);
 }

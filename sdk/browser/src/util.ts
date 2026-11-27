@@ -9,6 +9,13 @@ export function safe<A extends unknown[], R>(fn: (...args: A) => R): (...args: A
   };
 }
 
+/** A passive capture-phase listener that cannot throw into the page. Returns the function that removes it. */
+export function listen<E extends Event>(target: EventTarget, type: string, handler: (event: E) => void): () => void {
+  const guarded = safe(handler) as EventListener;
+  target.addEventListener(type, guarded, { capture: true, passive: true });
+  return () => target.removeEventListener(type, guarded, { capture: true });
+}
+
 export function readStorage(storage: 'localStorage' | 'sessionStorage', key: string): string | null {
   try {
     return window[storage].getItem(key);

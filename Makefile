@@ -32,6 +32,7 @@ web: sdk
 	rm -rf internal/webui/dist && mkdir -p internal/webui/dist
 	cp -R web/dist/. internal/webui/dist/
 	cp sdk/browser/dist/kimmi.js internal/webui/dist/kimmi.js
+	cp sdk/browser/dist/kimmi-feedback.js internal/webui/dist/kimmi-feedback.js
 
 server:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/kimmi ./cmd/kimmi

@@ -20,4 +20,13 @@ export default defineConfig([
     outExtension: () => ({ js: '.js' }),
     esbuildPlugins: [rrwebShake()],
   },
+  {
+    // The feedback button, loaded only by kimmi.showFeedback().
+    entry: { 'kimmi-feedback': 'src/feedback-widget.ts' },
+    format: ['iife'],
+    minify: true,
+    target: 'es2019',
+    platform: 'browser',
+    outExtension: () => ({ js: '.js' }),
+  },
 ]);

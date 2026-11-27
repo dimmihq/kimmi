@@ -294,6 +294,24 @@ export function scrubUrl(url: string, options: ScrubOptions): string {
   }, options);
 }
 
+/**
+ * A JSON copy of `track` props: strings scrubbed, values under keys that name a secret redacted.
+ * Undefined when the props are not a plain object, cannot be serialised or take more than `max` characters.
+ */
+export function scrubProps(props: unknown, options: ScrubOptions, max = 1024): Record<string, unknown> | undefined {
+  try {
+    const raw = JSON.stringify(props);
+    // Props that are not serialisable give no string here, and the next line throws into the catch.
+    if (raw[0] !== '{' || raw.length > max) return undefined;
+    const out = JSON.parse(raw, (key, value: unknown) =>
+      typeof value === 'object' ? value : sensitiveKey(key) ? REDACTED : typeof value === 'string' ? scrubText(value, options) : value,
+    ) as Record<string, unknown>;
+    return JSON.stringify(out).length > max ? undefined : out;
+  } catch {
+    return undefined;
+  }
+}
+
 const URL_FIELDS = new Set(['href', 'path', 'url', 'source']);
 
 /** A custom event payload with every string field scrubbed. `identify` is sent on purpose and kept. */
@@ -302,6 +320,7 @@ export function scrubPayload<T extends CustomTag>(tag: T, payload: CustomEventPa
   const out: Record<string, unknown> = { ...payload };
   for (const [field, value] of Object.entries(out)) {
     if (typeof value === 'string') out[field] = URL_FIELDS.has(field) ? scrubUrl(value, options) : scrubText(value, options);
+    else if (tag === 'track' && field === 'props') out[field] = scrubProps(value, options) ?? {};
   }
   return out as CustomEventPayloads[T];
 }

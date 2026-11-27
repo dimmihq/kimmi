@@ -1,4 +1,4 @@
-import type { CaptureConfig, PrivacyConfig, RemoteConfig } from './types';
+import type { AnalyticsConfig, CaptureConfig, FeedbackConfig, PrivacyConfig, RemoteConfig } from './types';
 
 const defaultPrivacy: PrivacyConfig = {
   maskAllText: false,
@@ -38,6 +38,9 @@ export function normalizeConfig(raw: unknown): RemoteConfig {
     sampleRate: Math.min(100, Math.max(0, sampleRate)),
     privacy: { ...defaultPrivacy, ...(value.privacy ?? {}) },
     capture: { ...defaultCapture, ...(value.capture ?? {}) },
+    // A server from before analytics sends neither object: every switch in them then reads as off.
+    analytics: value.analytics || ({} as AnalyticsConfig),
+    feedback: value.feedback || ({} as FeedbackConfig),
   };
 }
 

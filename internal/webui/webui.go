@@ -34,7 +34,7 @@ func Handler() http.Handler {
 				http.ServeContent(w, r, name, started, bytes.NewReader(data))
 				return
 			}
-			if path.Ext(name) != "" && strings.HasPrefix(name, "assets/") {
+			if path.Ext(name) != "" && (strings.HasPrefix(name, "assets/") || name == "kimmi-feedback.js") {
 				http.NotFound(w, r)
 				return
 			}
@@ -46,7 +46,7 @@ func Handler() http.Handler {
 
 func cacheControl(name string) string {
 	switch {
-	case name == "kimmi.js":
+	case name == "kimmi.js", name == "kimmi-feedback.js":
 		return "public, max-age=300"
 	case strings.HasPrefix(name, "assets/"):
 		// Vite puts content hashes in these names, so they never change.

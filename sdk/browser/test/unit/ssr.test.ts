@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import kimmi, { getSessionId, identify, init, optIn, optOut, stop } from '../../src/index';
+import kimmi, { feedback, getSessionId, identify, init, optIn, optOut, showFeedback, stop, track } from '../../src/index';
 
 describe('server-side rendering', () => {
   it('does nothing without a window', () => {
@@ -10,6 +10,10 @@ describe('server-side rendering', () => {
       identify('user-1', { email: 'a@b.c' });
       optIn();
       optOut();
+      track('signup', { plan: 'pro' });
+      feedback('Hello', { email: 'a@b.c' });
+      showFeedback();
+      kimmi.track('signup');
       stop();
       kimmi.init({ key: 'km_pub_test', host: 'http://localhost:8700' });
     }).not.toThrow();
