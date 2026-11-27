@@ -8,6 +8,7 @@ import (
 
 	"github.com/dimmihq/kimmi/internal/auth"
 	"github.com/dimmihq/kimmi/internal/notify"
+	"github.com/dimmihq/kimmi/internal/replay"
 	"github.com/dimmihq/kimmi/internal/settings"
 	"github.com/dimmihq/kimmi/internal/store"
 )
@@ -440,7 +441,7 @@ func (a *API) sharedEvents(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, errors.Join(err, errNotFound))
 		return
 	}
-	a.streamEvents(w, r, proj.ID, sh.SessionID)
+	a.streamEvents(w, r, proj.ID, sh.SessionID, replay.PublicEvent)
 }
 
 func (a *API) sharedAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +451,50 @@ func (a *API) sharedAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := a.trafficView(r, proj)
-	answer(a, w, r, out, err)
+	answer(a, w, r, publicTraffic(out), err)
+}
+
+// sharedTraffic is what a public analytics link returns: counts only. It is
+// written out field by field so that nothing added to the signed-in answer
+// reaches a public link by accident. No row is about one visitor, and it
+// carries no recording, visit, error or feedback.
+type sharedTraffic struct {
+	Totals      store.TrafficTotals `json:"totals"`
+	Previous    store.TrafficTotals `json:"previous"`
+	Days        []store.TrafficDay  `json:"days"`
+	Sources     []store.Breakdown   `json:"sources"`
+	Channels    []store.Breakdown   `json:"channels"`
+	Campaigns   []store.Breakdown   `json:"campaigns"`
+	Pages       []store.PageMetric  `json:"pages"`
+	EntryPages  []store.Breakdown   `json:"entryPages"`
+	ExitPages   []store.Breakdown   `json:"exitPages"`
+	Countries   []store.Breakdown   `json:"countries"`
+	Devices     []store.Breakdown   `json:"devices"`
+	Browsers    []store.Breakdown   `json:"browsers"`
+	Systems     []store.Breakdown   `json:"systems"`
+	Languages   []store.Breakdown   `json:"languages"`
+	Goals       []sharedGoal        `json:"goals"`
+	GoalSources []store.NameCount   `json:"goalSources"`
+}
+
+type sharedGoal struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Value       string `json:"value"`
+	Conversions int    `json:"conversions"`
+}
+
+func publicTraffic(v trafficView) sharedTraffic {
+	t := v.Traffic
+	out := sharedTraffic{Totals: t.Totals, Previous: t.Previous, Days: t.Days, Sources: t.Sources, Channels: t.Channels,
+		Campaigns: t.Campaigns, Pages: t.Pages, EntryPages: t.EntryPages, ExitPages: t.ExitPages, Countries: t.Countries,
+		Devices: t.Devices, Browsers: t.Browsers, Systems: t.Systems, Languages: t.Languages,
+		Goals: make([]sharedGoal, 0, len(v.Goals)), GoalSources: v.GoalSources}
+	for _, g := range v.Goals {
+		out.Goals = append(out.Goals, sharedGoal{g.ID, g.Name, g.Kind, g.Value, g.Conversions})
+	}
+	return out
 }
 
 // Feedback.

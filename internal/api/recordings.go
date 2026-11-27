@@ -147,10 +147,12 @@ func (a *API) getRecording(w http.ResponseWriter, r *http.Request, _ *principal,
 // recordingEvents streams {events, lastSeq, complete}. The events array is
 // written chunk by chunk, so memory stays flat however long the recording is.
 func (a *API) recordingEvents(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {
-	a.streamEvents(w, r, proj.ID, r.PathValue("rid"))
+	a.streamEvents(w, r, proj.ID, r.PathValue("rid"), nil)
 }
 
-func (a *API) streamEvents(w http.ResponseWriter, r *http.Request, projectID, recordingID string) {
+// streamEvents writes a recording's events. filter, when set, decides what
+// of each event is sent: a public link passes replay.PublicEvent.
+func (a *API) streamEvents(w http.ResponseWriter, r *http.Request, projectID, recordingID string, filter func([]byte) ([]byte, bool)) {
 	after := int64(-1)
 	if s := r.URL.Query().Get("after"); s != "" {
 		n, err := strconv.ParseInt(s, 10, 64)
@@ -189,7 +191,7 @@ func (a *API) streamEvents(w http.ResponseWriter, r *http.Request, projectID, re
 		out = bufio.NewWriterSize(zw, 64<<10)
 	}
 	out.WriteString(`{"events":[`)
-	if err := a.Source.WriteEvents(r.Context(), &replay.ArrayWriter{W: out}, rec, blocks, after); err != nil {
+	if err := a.Source.WriteEvents(r.Context(), &replay.ArrayWriter{W: out, Filter: filter}, rec, blocks, after); err != nil {
 		// Headers are gone; cutting the connection is the only honest signal.
 		a.Log.Error("stream recording events", "recording", rec.ID, "err", err)
 		panic(http.ErrAbortHandler)

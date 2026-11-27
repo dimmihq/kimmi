@@ -397,8 +397,8 @@ Heatmap = { clicks, cells: { x /* percent of the page width */, y /* steps of 10
 | `POST /projects/{id}/shares` | `{ kind: "recording"|"dashboard", recordingId?, startMs?, expiresInDays: 1|7|30 }` | `Share & { link }` (admin); `403` while `sharing.enabled` is false |
 | `DELETE /projects/{id}/shares/{sid}` | | 204 (admin) |
 | `GET /shared/{token}` (public) | | `{ kind, project, expiresAt, startMs, recording?: { startedAt, durationMs, viewport, pages, device, browser, os, live } }` |
-| `GET /shared/{token}/events?after=` (public) | | as `GET .../recordings/{rid}/events`, for a recording link |
-| `GET /shared/{token}/analytics?days=` (public) | | `Traffic`, for a dashboard link |
+| `GET /shared/{token}/events?after=` (public) | | `{ events, lastSeq, complete }` for a recording link, with `events` cut down to an allow-list (below) |
+| `GET /shared/{token}/analytics?days=` (public) | | the fields of `Traffic` and nothing else, for a dashboard link |
 | `GET /projects/{id}/feedback?page=&limit=` | | `{ items: Feedback[], total, unseen }` newest first |
 | `PATCH /projects/{id}/feedback/{fid}` | `{ seen }` | 204 (member) |
 | `DELETE /projects/{id}/feedback/{fid}` | | 204 (member) |
@@ -408,6 +408,7 @@ Heatmap = { clicks, cells: { x /* percent of the page width */, y /* steps of 10
 `Note = { id, recordingId, userId, author, atMs, body, createdAt }`, `Share = { id, kind, recordingId, startMs, createdBy, author, createdAt, expiresAt }`, `Feedback = { id, visitId, path, body, email, createdAt, seen, recorded, startedAt }`.
 
 - Public links are off until an admin sets `sharing.enabled`. The link is `{KIMMI_PUBLIC_URL}/shared/{token}`; the token is shown once and only its hash is stored. A link answers `404` once it expires or is revoked, when its recording or project is deleted, and while `sharing.enabled` is false. A recording link shows the replay and nothing about the visitor.
+- What a public link returns is an allow-list written out in the server, so a field added to a signed-in answer never reaches one. `events` holds only rrweb's own playback events (types 0 to 4: load, snapshots, incremental changes, meta) and kimmi's `navigate` event rebuilt as `{ href, path, title }`; `console`, `network`, `error`, `rage-click`, `dead-click`, `identify` and `track` events, plugin events and unknown types are never sent. The link itself returns `kind`, `project` (its name), `expiresAt`, `startMs` and, for a recording, `recording: { startedAt, durationMs, viewport, pages, device, browser, os, live }`: no visitor, no identity, no place, no ids. A dashboard link returns counts only: no row is about one visitor, and there is no recording, visit, error or feedback in it.
 - Alerts go to one webhook per project (`alerts.webhookUrl`; nothing is sent without one): `POST` with `Content-Type: application/json`, `X-Kimmi-Event`, and `X-Kimmi-Signature: sha256=<hex HMAC-SHA256 of the body with alerts.secret>` when a secret is set. Body: `{ event, project: { id, name }, at, title, text, url, data }`. Events: `error.new` (a fingerprint the project has not seen), `error.spike` and `rage.spike` (the last hour reached the threshold; at most once an hour), `traffic.none` (no visit for 24 hours; at most once a day), `feedback.new`, `digest.weekly` (Monday from 08:00 in the project's time zone: the last seven days), `test`. A delivery times out after 5 seconds, follows no redirect and is not retried. `GET /settings` shows `webhookUrl` as `hidden` and `secret` as empty to anyone below admin.
 
 ### MCP

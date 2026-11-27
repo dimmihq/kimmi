@@ -134,12 +134,22 @@ func SplitEvents(array []byte) ([]Event, error) {
 // (without the brackets), so a long recording streams without being held in
 // memory as a whole.
 type ArrayWriter struct {
-	W     io.Writer
-	wrote bool
+	W io.Writer
+	// Filter, when set, sees every element first: it returns what to write
+	// in its place, or false to leave the element out.
+	Filter func(e []byte) ([]byte, bool)
+	wrote  bool
 }
 
 // WriteElement appends one element.
 func (aw *ArrayWriter) WriteElement(e []byte) error {
+	if aw.Filter != nil {
+		kept, ok := aw.Filter(e)
+		if !ok {
+			return nil
+		}
+		e = kept
+	}
 	if aw.wrote {
 		if _, err := aw.W.Write([]byte{','}); err != nil {
 			return err
@@ -159,6 +169,9 @@ func (aw *ArrayWriter) WriteArray(a []byte) error {
 	inner := bytes.TrimSpace(a[1 : len(a)-1])
 	if len(inner) == 0 {
 		return nil
+	}
+	if aw.Filter != nil {
+		return ScanArray(bytes.NewReader(a), MaxEvent, aw.WriteElement)
 	}
 	if aw.wrote {
 		if _, err := aw.W.Write([]byte{','}); err != nil {

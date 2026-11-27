@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +152,10 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	// one stops at pricing and hits an error, one bounces without cookies.
 	now := time.Now().UnixMilli()
 	rec := makeSession(now-60_000, "anon-1", 1)
+	rec.batches[0] = append(rec.batches[0],
+		obj{"type": 5, "timestamp": now - 59_000, "data": obj{"tag": "identify", "payload": obj{"id": "user-42", "email": "ada@example.com"}}},
+		obj{"type": 5, "timestamp": now - 58_000, "data": obj{"tag": "network", "payload": obj{"method": "GET", "url": "https://api.acme.dev/secret", "status": 200}}},
+		obj{"type": 5, "timestamp": now - 57_000, "data": obj{"tag": "navigate", "payload": obj{"href": "https://shop.acme.dev/pricing", "path": "/pricing", "title": "Pricing"}}})
 	postBatch(t, srv.URL, proj.PublicKey, rec.body(t, 0, now-60_000), 204)
 	hit := func(visit, anon string, events ...obj) obj {
 		return obj{"v": 1, "visitId": visit, "anonymousId": anon, "startedAt": now - 60_000, "url": "https://shop.acme.dev/pricing",
@@ -373,10 +378,62 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	if public.Kind != "recording" || public.Project != "Shop" || public.StartMs != 1500 || public.Recording["visitor"] != nil {
 		t.Fatalf("public link: %+v", public)
 	}
+	// A public link gets an allow-list: the exact keys below and nothing
+	// else, and of the events only what plays the page back.
+	sameKeys := func(what string, got obj, want ...string) {
+		t.Helper()
+		keys := make([]string, 0, len(got))
+		for k := range got {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		slices.Sort(want)
+		if !slices.Equal(keys, want) {
+			t.Fatalf("%s has keys %v, want exactly %v", what, keys, want)
+		}
+	}
+	body := func(path string) string {
+		t.Helper()
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		raw, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("GET %s: %d", path, res.StatusCode)
+		}
+		return string(raw)
+	}
+	var whole obj
+	stranger.do("GET", "/api/v1/shared/"+token, nil, 200, &whole)
+	sameKeys("a public recording link", whole, "kind", "project", "expiresAt", "startMs", "recording")
+	sameKeys("its recording", whole["recording"].(obj), "startedAt", "durationMs", "viewport", "pages", "device", "browser", "os", "live")
 	var evs eventsResponse
 	stranger.do("GET", "/api/v1/shared/"+token+"/events?after=-1", nil, 200, &evs)
-	if len(evs.Events) != len(rec.all(0)) {
-		t.Fatalf("public events: %d", len(evs.Events))
+	var signedIn eventsResponse
+	owner.do("GET", p+"/recordings/"+rec.id+"/events?after=-1", nil, 200, &signedIn)
+	if len(signedIn.Events) != len(rec.all(0)) || len(evs.Events) != len(signedIn.Events)-3 {
+		t.Fatalf("public events: %d of %d (the console, identify and network events must be left out)", len(evs.Events), len(signedIn.Events))
+	}
+	for _, e := range evs.Events {
+		ev := e.(obj)
+		kind := ev["type"].(float64)
+		if kind > 5 || (kind == 5 && ev["data"].(obj)["tag"] != "navigate") {
+			t.Fatalf("a public link received %v", ev)
+		}
+		if kind == 5 {
+			sameKeys("a public navigate event", ev["data"].(obj)["payload"].(obj), "href", "path", "title")
+		}
+	}
+	publicEvents := body("/api/v1/shared/" + token + "/events?after=-1")
+	for _, forbidden := range []string{"console", "batch 0", "identify", "ada@example.com", "user-42", "network", "api.acme.dev/secret", "anon-1", rec.id, "visitor"} {
+		if strings.Contains(publicEvents, forbidden) || strings.Contains(body("/api/v1/shared/"+token), forbidden) {
+			t.Errorf("%q reached a public recording link", forbidden)
+		}
+	}
+	if !strings.Contains(publicEvents, `"tag":"navigate"`) || !strings.Contains(publicEvents, "/pricing") {
+		t.Error("the navigation a public page shows is missing")
 	}
 	stranger.do("GET", "/api/v1/shared/"+token+"/analytics", nil, 404, nil)
 	stranger.do("GET", "/api/v1/shared/"+strings.Repeat("0", 64), nil, 404, nil)
@@ -387,6 +444,28 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	stranger.do("GET", "/api/v1/shared/"+dashToken+"/analytics?days=7", nil, 200, &traffic)
 	if traffic.Totals.Visits != 3 {
 		t.Fatalf("shared analytics: %+v", traffic.Totals)
+	}
+	whole = nil // decoding into a used map would keep its old keys
+	stranger.do("GET", "/api/v1/shared/"+dashToken+"/analytics?days=7", nil, 200, &whole)
+	sameKeys("public analytics", whole, "totals", "previous", "days", "sources", "channels", "campaigns", "pages", "entryPages", "exitPages",
+		"countries", "devices", "browsers", "systems", "languages", "goals", "goalSources")
+	sameKeys("public totals", whole["totals"].(obj), "visitors", "visits", "pageviews", "bounces", "avgDurationMs", "newVisitors", "returning")
+	sameKeys("a public page row", whole["pages"].([]any)[0].(obj), "path", "views", "visitors", "avgTimeMs", "exits", "scroll")
+	sameKeys("a public source row", whole["sources"].([]any)[0].(obj), "name", "visitors", "visits")
+	sameKeys("a public goal", whole["goals"].([]any)[0].(obj), "id", "name", "kind", "value", "conversions")
+	sameKeys("a public link to analytics", func() obj { var v obj; stranger.do("GET", "/api/v1/shared/"+dashToken, nil, 200, &v); return v }(),
+		"kind", "project", "expiresAt", "startMs")
+	publicNumbers := body("/api/v1/shared/" + dashToken + "/analytics?days=7")
+	for _, forbidden := range []string{rec.id, "visit-2", "anon-", "TypeError", "price is undefined", "The buy button does nothing", "button.buy",
+		"fingerprint", "visitId", "recordingId", "email", hook.URL, "s3cret"} {
+		if strings.Contains(publicNumbers, forbidden) {
+			t.Errorf("%q reached a public analytics link", forbidden)
+		}
+	}
+	// The other project routes stay closed to a link's holder.
+	for _, closed := range []string{"/errors", "/friction", "/feedback", "/funnels", "/events", "/recordings", "/visitors", "/heatmaps", "/requests", "/shares", "/settings"} {
+		stranger.do("GET", p+closed, nil, 401, nil)
+		stranger.do("GET", "/api/v1/shared/"+dashToken+closed, nil, 404, nil)
 	}
 	stranger.do("GET", "/api/v1/shared/"+dashToken+"/events", nil, 404, nil)
 	var shares []struct{ ID string }
