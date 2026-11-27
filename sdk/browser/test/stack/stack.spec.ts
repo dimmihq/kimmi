@@ -333,6 +333,14 @@ test('the dashboard shows it', async ({ browser }) => {
   await expect(page).toHaveURL(/\/recordings\/[0-9a-f-]+/);
   await expect(page.locator('iframe').first()).toBeVisible({ timeout: 20_000 });
 
+  // It plays: the clock under the stage moves on.
+  const clock = async () => /(\d+:\d\d) \/ \d+:\d\d/.exec(await page.locator('body').innerText())?.[1] ?? '';
+  await page.goto(page.url().split('?')[0]!);
+  await expect(page.locator('iframe').first()).toBeVisible({ timeout: 20_000 });
+  expect(await clock()).toBe('0:00');
+  await page.getByRole('button', { name: 'Play', exact: true }).first().click();
+  await expect.poll(clock, { timeout: 15_000 }).not.toBe('0:00');
+
   // A note on a moment, then a public link to it.
   await page.getByRole('tab', { name: /notes/i }).click();
   await page.getByPlaceholder(/add a note/i).fill(`Look at this (${run})`);
@@ -353,6 +361,14 @@ test('the dashboard shows it', async ({ browser }) => {
   await page.goto(at('/heatmaps?days=1&path=%2Fproducts%2Foak-tray'));
   await expect(page.locator('canvas').first()).toBeVisible({ timeout: 20_000 });
   await page.waitForTimeout(2500);
+  // The overlay is really painted: some of its pixels are not transparent.
+  const painted = await page.locator('canvas').first().evaluate((canvas: HTMLCanvasElement) => {
+    const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
+    let count = 0;
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]! > 0) count++;
+    return count;
+  });
+  expect(painted, 'heat is drawn on the canvas').toBeGreaterThan(200);
   await shot(page, '08-heatmap-clicks');
   await page.goto(at('/heatmaps?days=1&path=%2Fproducts%2Foak-tray&view=scroll'));
   await page.waitForTimeout(2500);
