@@ -7,10 +7,10 @@
   </a>
 </p>
 
-<h3 align="center">Open source session replay in one binary</h3>
+<h3 align="center">Open source session replay and analytics in one binary</h3>
 
 <p align="center">
-  See what your visitors saw: recordings, live sessions, rage clicks, errors, console and network,<br>
+  See what your visitors saw, and how many of them: recordings, traffic, funnels, heatmaps and errors,<br>
   with masking done in the browser. MIT licensed, on your own server, with SQLite or PostgreSQL.
 </p>
 
@@ -54,8 +54,16 @@ Session replay tools charge $2 to $8 per thousand sessions and need Kafka, Click
 - **Inspector:** activity, console and network beside the recording, each row jumping to its moment.
 - **Friction signals:** rage clicks, dead clicks and uncaught errors detected in the browser and counted per session.
 - **Visitors:** identify people with one call and see everything they recorded.
+- **Analytics:** visitors, visits, page views and bounce rate, with sources, campaigns, entry and exit pages, countries and devices. Every number opens the recordings behind it.
+- **Events, goals and funnels:** one call to track an event, goals counted per source, and funnels that show the recordings of the visits that stopped at each step.
+- **Heatmaps:** where people click and how far they scroll, drawn on the page as a visitor saw it.
+- **Errors and performance:** errors grouped by kind with a recording of each, the buttons people rage-click, failing requests, and web vitals per page.
+- **Feedback and notes:** a feedback button that arrives with the session it was sent from, and notes on any moment of a recording.
+- **Alerts:** one webhook for new errors, spikes, feedback and a weekly digest.
+- **Sharing:** expiring public links to one recording or to the analytics page, off until an admin turns them on.
+- **For assistants:** an MCP endpoint that reads traffic, errors, funnels and recordings with an API token.
 - **Projects and team:** unlimited projects, roles, invitations and API tokens.
-- **Privacy controls per project:** mask text, mask inputs, block media, mask or block by selector, sampling, URL rules, consent, retention.
+- **Privacy controls per project:** mask text, mask inputs, block media, mask or block by selector, sampling, URL rules, consent, cookieless counting, retention.
 
 ## Get started
 
@@ -103,6 +111,15 @@ Then, optionally, say who the visitor is:
 kimmi.identify('user-42', { email: 'ada@example.com', name: 'Ada' });
 ```
 
+Count what matters with one call, and let visitors tell you what went wrong:
+
+```js
+kimmi.track('signup', { plan: 'pro', value: 49 });
+kimmi.feedback('The coupon box does nothing');
+```
+
+Page views, sources, clicks for heatmaps, errors and web vitals need no code: they are counted for every visitor, recorded or not. Outbound links, downloads and form submissions are tracked by themselves too.
+
 The same recorder is a typed package, `@kimmi/browser`, in [`sdk/browser`](sdk/browser). Working examples for a React single-page app and Next.js live in [`examples`](examples).
 
 ## Privacy
@@ -113,6 +130,9 @@ Masking and scrubbing happen in the visitor's browser, before anything is sent. 
 - **Text** can be masked everywhere, or per element with a selector, `data-private` or the `kimmi-mask` class.
 - **Elements** can be left out entirely with a selector or the `kimmi-block` class.
 - **Console, network and errors** are scrubbed of tokens, passwords, card numbers and, by default, email addresses and phone numbers. Request bodies are off unless you turn them on.
+- **Analytics** carry no page content: paths, a source, a country from the time zone, and the events you track. What you pass to `kimmi.track` and what visitors write as feedback is scrubbed like console text.
+- **Cookieless counting** counts visits without storing anything in the browser, with a hash that is thrown away every night. It covers counting only: with it on, recordings start after `kimmi.optIn()`.
+- **Public links** are off by default, expire, show nothing about the visitor, and stop working when they are revoked or the recording is deleted.
 - **Consent, Do Not Track, sampling and retention** are settings of each project.
 
 ## Configuration

@@ -281,7 +281,7 @@ func (a *API) mcpCall(r *http.Request, p *principal, params json.RawMessage) (an
 				}
 			}
 			if !found {
-				return toolError(errors.New("no such project; call list_projects for the ids")), nil
+				return toolError(invalid("No such project; call list_projects for the ids", nil)), nil
 			}
 		}
 		started := time.Now()

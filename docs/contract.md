@@ -2,13 +2,13 @@
 
 The single source of truth shared by the server, the browser SDK and the dashboard. If an implementation has to deviate, change this file in the same edit and say so in your report.
 
-kimmi is self-hosted session replay: one Go binary that ingests rrweb recordings from a browser SDK, stores them on local disk or S3-compatible storage, indexes them in SQLite or PostgreSQL, and serves an embedded React dashboard.
+kimmi is self-hosted session replay with analytics: one Go binary that ingests rrweb recordings and small analytics hits from a browser SDK, stores recordings on local disk or S3-compatible storage, indexes them and the hits in SQLite or PostgreSQL, and serves an embedded React dashboard.
 
 ## Repository layout
 
 ```
 cmd/kimmi/            main: `kimmi serve`, `kimmi admin`, `kimmi loadgen`, `kimmi version`
-internal/             all Go packages (config, store, blob, ingest, worker, api, auth, guard, bootstrap, project, webui)
+internal/             all Go packages (config, store, blob, ingest, worker, api, auth, guard, bootstrap, project, notify, webui)
 internal/webui/dist/  built dashboard + kimmi.js, embedded with go:embed (a placeholder index.html is committed)
 web/                  dashboard (Vite, React 19, Tailwind v4). Builds to web/dist
 sdk/browser/          @kimmi/browser (TypeScript, rrweb). Builds ESM + IIFE (dist/kimmi.js)
@@ -99,6 +99,13 @@ Every row carries `org_id`; anything project-scoped carries `project_id`. Ids ar
 - `sessions(id, org_id, project_id, visitor_id, started_at, last_at, duration_ms, active_ms, pages, entry_path, exit_path, urls json, clicks, keypresses, rage_clicks, dead_clicks, errors, viewport_w, viewport_h, device, browser, os, country_code, city, referrer, release, size_bytes, block_count, last_seq, seen, starred, sealed, sealed_key, sealed_chunks json, deleted_at)` (`last_seq` is the highest block seq received)
 - `blocks(session_id, seq, project_id, file_key, offset, length, first_ts, last_ts, created_at)` live tier only; rows are deleted when the session is sealed
 - `usage_daily(project_id, day, sessions, bytes)`
+- `visits(id, org_id, project_id, visitor_key, started_at, last_at, pageviews, actions, engaged_ms, entry_path, exit_path, referrer, channel, utm_source, utm_medium, utm_campaign, country_code, device, browser, os, language, viewport_w, release, is_returning, cookieless)` one row per visit, recorded or not. A recorded visit has the id of its session. `visitor_key` is `a:` and the anonymous id, or `h:` and the day's cookieless hash. `referrer` is a host (or the `utm_source` when there is no referrer); `channel` is `Direct`, `Search`, `Social`, `AI`, `Email`, `Paid`, `Referral` or `Campaign`
+- `events(id, org_id, project_id, visit_id, ts, kind, path, name, label, value, x, y, w, num, props json)` the event index: see Events of a hit
+- `notes(id, org_id, project_id, session_id, user_id, at_ms, body, created_at)`
+- `shares(id, org_id, project_id, kind recording|dashboard, session_id, start_ms, token_hash unique, created_by, created_at, expires_at)`
+- `feedback(id, org_id, project_id, visit_id, visitor_key, path, body, email, created_at, seen)`
+- `salts(day, salt)` the secret of each day's cookieless hashes; only today's is kept
+- `project_state(project_id, name, value, updated_at)` when an alert last fired, which week's digest was sent
 
 Postgres: `sessions` is partitioned by day on `started_at`; retention drops whole partitions where every project agrees, and deletes by project otherwise. SQLite: same logical tables, no partitions. One `Store` interface, two implementations, one conformance test suite run against both.
 
@@ -107,6 +114,13 @@ Postgres: `sessions` is partitioned by day on `started_at`; retention drops whol
 1. **Live.** The ingest handler never decompresses the events. It copies each batch's compressed bytes into an in-memory buffer (bounded by `KIMMI_INGEST_BUFFER`, past which batches get `503`) and, every `KIMMI_FLUSH_INTERVAL` or as soon as 8 MiB (at most a quarter of the buffer) wait, streams one object `live/{yyyy-mm-dd}/{node}-{unixms}.bin` holding all buffered blocks back to back, then inserts `blocks` rows (file key, offset, length) and upserts the `sessions` rows from the batch metadata. A graceful shutdown flushes first.
 2. **Sealed.** The worker finds sessions idle longer than `KIMMI_SESSION_IDLE`, reads their blocks in `seq` order, streams each one through gunzip event by event (one session and one sealing run at a time; a single event over 64 MiB is refused), re-encodes the session as zstd chunks of about 1 MB split on event boundaries, appends them to a per-project object `sealed/{retentionDays}d/{projectId}/{yyyy-mm-dd}/{uuid}.bin` (one new object per project per sealing run, closed at about 8 MiB and continued in another, since S3 objects cannot be appended to and the object is built in memory; chunks close at block boundaries, and only a single block over 1 MB is split between events), stores `sealed_key` and `sealed_chunks` (offset, length, first_ts, last_ts, events, first_seq, last_seq) on the session, and deletes its `blocks` rows. Live objects with no remaining blocks are deleted.
 3. **Cleanup.** Nightly (and on demand): sessions past their project's retention are marked deleted and their sealed objects removed when no live session references them.
+
+### What is kept how long, and what erasing removes
+
+- Recordings follow `retention.days`. Visits, events and feedback follow `analytics.retentionDays` (30, 90, 365 or 730; default 365), so trends outlive recordings. The nightly cleanup removes both.
+- Deleting a recording (by hand or by retention) removes its notes and its public links. Its visit and events stay until the analytics retention passes: they hold no page content.
+- Erasing a visitor (`DELETE /visitors/{vid}`, `POST /visitors/erase`) removes their visits, events, feedback, and the notes and links of their recordings, in the same transaction as the recordings.
+- Deleting a project removes all of it.
 
 The blob interface has two drivers, `local` and `s3`, with `Put`, `Get(key, offset, length)`, `Delete`, `List(prefix)`.
 
@@ -127,7 +141,9 @@ CORS: any origin, no credentials. A project's `origins` list, when not empty, is
   "capture": { "console": true, "network": true, "networkBodies": false, "performance": true,
                "frustration": true, "crossOriginIframes": false, "startOnError": false,
                "minDurationMs": 2000, "idleTimeoutMs": 900000, "maxLengthMs": 3600000,
-               "urlRules": [ { "type": "contains", "pattern": "/checkout" } ] }
+               "urlRules": [ { "type": "contains", "pattern": "/checkout" } ] },
+  "analytics": { "enabled": true, "cookieless": false, "autoEvents": true, "heatmaps": true },
+  "feedback": { "widget": false }
 }
 ```
 
@@ -163,6 +179,40 @@ Metadata:
 
 `seq` starts at 0 and increases by one per batch within a session. `startedAt` must be the same in every batch of a session. `counts`, `paths` and `pageviews` describe this batch only (the server sums them); `paths` lists the paths visited during the batch and `path` is the current one. `identity` is optional. Responses: `204` stored; `400` malformed; `403` origin not allowed or key unknown (SDK stops); `413` over 5 MB; `429` over quota or over the per (project, address) rate limit `KIMMI_INGEST_RATE`, with `Retry-After` in seconds (the SDK stops for the session); `503` the server is behind on writes, its buffer for the node or the project is full, or too many bodies are being read at once, with `Retry-After` (retry later). A batch body must arrive within 30 seconds. A `GET /i/v1/config` with an unknown key answers `200` with `recording: false`; a known key from a refused origin answers `403`. Origin entries may use a wildcard subdomain: `https://*.acme.dev`. The server reads device, browser and OS from the `User-Agent` header, and derives `country_code`, country and city from `timezone` with a small embedded IANA-zone table (no IP database). The IP is used only for rate limiting, stored according to `privacy.ip`.
 
+### `POST /i/v1/hit?key={publicKey}`
+
+Analytics travel apart from recordings, as small JSON, so they flow for visits that are not recorded (sampling, URL rules, no consent) and the server never decompresses a recording to count something. Body: JSON text of at most 64 KB, sent as `text/plain` with `fetch(keepalive)` or `navigator.sendBeacon`:
+
+```json
+{ "v": 1, "visitId": "uuid", "anonymousId": "uuid, or empty", "startedAt": 1795750000000,
+  "url": "https://shop.acme.dev/pricing", "landing": "https://shop.acme.dev/?utm_source=news", "referrer": "https://google.com/",
+  "viewport": { "w": 1440, "h": 900 }, "language": "en-GB", "timezone": "Africa/Lagos", "release": "v4.18.2",
+  "events": [ { "t": 1795750000123, "k": "page", "p": "/pricing", "l": "Pricing" } ] }
+```
+
+`visitId` is the recording's session id while one is running, so a visit and its recording share an id. `landing` is the visit's first URL; the server reads `utm_source`, `utm_medium`, `utm_campaign` and paid click ids from it, and the source from `referrer` (a referrer on the site's own host is not a source). At most 200 events a hit. Responses: `204` stored; `400` malformed; `403` key unknown, origin refused or analytics off for the project (the SDK stops); `413` too large; `429` rate limited, sharing the batch limit; `503` buffer full. Hits are buffered and written with each flush, in one transaction per flush.
+
+A hit with an empty `anonymousId` is cookieless: the server names the visitor `sha256(salt of the UTC day | project | client address | User-Agent)`, cut to 128 bits. The salt is random, stored only for its day and deleted the next, so the hash cannot be redone later and a returning visitor counts again the next day. Hits of one such visitor at most 30 minutes apart are one visit. The address is not stored.
+
+#### Events of a hit
+
+Keys: `t` time in ms, `k` kind, `p` path, `n` name, `l` label, `v` number, `x` `y` `w` `num` integers, `d` a small object. Unknown kinds are dropped.
+
+| `k` | meaning |
+|---|---|
+| `page` | a page view: on load and on every route change; `l` is the title |
+| `leave` | leaving a page (next page, tab hidden, page closed): `v` engaged ms since the last `leave`, `num` deepest scroll in percent, `y` page height, `w` viewport width. Several may follow one page view: `v` adds up, `num` is the maximum |
+| `track` | `kimmi.track(name, props)`: `n` name, `d` props, `v` the `value` or `revenue` prop. Automatic events are `$outbound` (`d.url` host and path), `$download` (`d.file`), `$email`, `$phone`, `$form` (`d.form`, `d.action`) |
+| `error` | an uncaught error: `l` message, `d` `{ source, stack }`. The server groups by a fingerprint of the message (numbers flattened) and the first stack frame without line and column |
+| `rage`, `dead` | rage click and dead click: `n` selector, `l` element text, `v` clicks (rage). Only while recording |
+| `click` | for heatmaps: `n` selector, `l` text, `x` in 1/10000 of the page width, `y` page pixels, `w` viewport width |
+| `request` | a fetch or XHR that failed (`status` 0 or 400 and above) or took 3 s or more: `n` `METHOD host/path`, `v` ms, `num` status |
+| `vital` | once per page load: `n` `lcp`, `inp`, `cls`, `fcp` or `ttfb`, `v` the value |
+
+### `POST /i/v1/feedback?key={publicKey}`
+
+`{ "v": 1, "visitId", "anonymousId", "path", "text", "email" }` as `text/plain` JSON, at most 8 KB. `text` is required (2000 characters are kept), `email` optional. `204` stored; otherwise as for a hit.
+
 ### Events inside a batch
 
 Standard rrweb 2.x events, plus rrweb custom events (`type: 5`) with these tags:
@@ -176,6 +226,7 @@ Standard rrweb 2.x events, plus rrweb custom events (`type: 5`) with these tags:
 | `rage-click` | `{ selector, text, count }` three or more clicks on one element within 700 ms |
 | `dead-click` | `{ selector, text }` a click on an interactive-looking element followed by no DOM change, navigation or network request within 1.5 s |
 | `identify` | `{ id, email, name }` |
+| `track` | `{ name, props }` from `kimmi.track`, so the player can show it |
 
 ### SDK surface (`@kimmi/browser`)
 
@@ -184,7 +235,12 @@ kimmi.init({ key: 'km_pub_...', host: 'http://localhost:8700', release?: string,
              scrub?: (text: string) => string /* runs on console, network, error and URL text before sending */ })
 kimmi.identify(id: string, traits?: { email?: string; name?: string; [k: string]: unknown })
 kimmi.optIn(); kimmi.optOut(); kimmi.stop(); kimmi.getSessionId(): string | null
+kimmi.track(name: string, props?: Record<string, unknown>)   // a `value` or `revenue` number is summed in reports
+kimmi.feedback(text: string, options?: { email?: string })
+kimmi.showFeedback()                                         // loads {host}/kimmi-feedback.js and shows the button
 ```
+
+Analytics start when `analytics.enabled`, independently of `sampleRate`, `urlRules`, `minDurationMs` and `startOnError`. A visit is named, in order: by the running recording session; when `analytics.cookieless`, by nothing kept in the browser (an id in memory for the page load, an empty `anonymousId`); otherwise by the anonymous id in `localStorage` and a visit in `sessionStorage` (`kimmi.visit`, 30 minutes of inactivity), when consent allows storage. `optOut()` and Do Not Track (with `privacy.respectDnt`) stop analytics too. With `analytics.cookieless` the recorder waits for `kimmi.optIn()` as if `privacy.requireConsent` were on, and nothing is written to `localStorage` or `sessionStorage` before that. Every string in a hit goes through the same scrubbing as console, network and error text; click text of a masked element is empty; link targets of `mailto:` and `tel:` are never sent.
 
 Script tag: `<script src="{host}/kimmi.js" data-key="km_pub_..." defer></script>` auto-inits and exposes `window.kimmi`. Flush every 2 s and on `visibilitychange`/`pagehide` (beacon). Session id and seq live in `sessionStorage`; a session ends after `idleTimeoutMs` without activity or at `maxLengthMs`, and a new one starts with a fresh full snapshot.
 
@@ -249,7 +305,14 @@ Base `/api/v1`. JSON. Auth: cookie `kimmi_session` (HttpOnly, SameSite=Lax) set 
 ```ts
 Project = { id, name, slug, platform, origin, timezone, publicKey, origins: string[], retentionDays, createdAt,
             stats: { recordings24h, live, avgDurationMs, storageBytes, recordings, series: number[] /* 30 daily counts, oldest first */, lastRecordingAt: number|null } }
-ProjectSettings = { privacy: {...as in /i/v1/config, including scrubEmails and scrubPhones}, capture: {...as in /i/v1/config, plus sampleRate}, retention: { days: 7|30|90|365, keepStarred: boolean } }
+ProjectSettings = { privacy: {...as in /i/v1/config, including scrubEmails and scrubPhones}, capture: {...as in /i/v1/config, plus sampleRate}, retention: { days: 7|30|90|365, keepStarred: boolean },
+                    analytics: { enabled, cookieless, autoEvents, heatmaps: boolean, retentionDays: 30|90|365|730, goals: Goal[] /* at most 20 */, funnels: Funnel[] /* at most 10 */ },
+                    feedback: { widget: boolean },
+                    alerts: { webhookUrl, secret: string, newErrors: boolean, errorSpike, rageSpike: number /* in an hour; 0 is off */, noTraffic, feedback, weeklyDigest: boolean },
+                    sharing: { enabled: boolean } }
+Step = { kind: "page"|"event", value: string }   // a path, or a prefix ending in *; or a tracked event's name
+Goal = Step & { id, name }                        // send id "" for a new one
+Funnel = { id, name, steps: Step[] /* 2 to 6 */ }
 ProjectMember = { userId, name, email, role, lastActiveAt }
 platform = "react" | "next" | "vue" | "astro" | "svelte" | "script"
 ```
@@ -281,6 +344,74 @@ Overview = { totals: { recordings, today, avgDurationMs, avgActiveMs, frictionSe
              topPages: { path, views, rage }[], devices: { name, count }[], countries: { code, name, count }[] }
 Live = { visitors, activeLast5m, pages: { path, count }[], countries: { code, name, count }[], sessions: Recording[] }
 ```
+
+`GET /recordings` also takes `sort=score` (most worth watching first: errors, rage and dead clicks, pages and activity) and one value each of `entry`, `exit`, `path`, `country` (code), `browser`, `os`, `release` (read from the recording), `referrer` (a host, or `Direct`), `channel`, `utmSource`, `utmCampaign`, `language` (read from its visit), and `event=kind:name` with an optional `eventPath` (`error:<fingerprint>`, `rage:<selector>`, `dead:<selector>`, `track:<name>`, `request:<name>`). Every row of the analytics routes links to the list with one of these.
+
+### Analytics
+
+All under `/projects/{id}`, for viewers and above. `days` is `1`, `7` (default), `14`, `30` or `90`; the window ends now and starts at a day boundary of the project's time zone. Visit filters, one value each: `path` (a visit that viewed it), `entry`, `exit`, `referrer`, `channel`, `utmSource`, `utmCampaign`, `country`, `device`, `browser`, `os`, `language`.
+
+| Method and path | Returns |
+|---|---|
+| `GET /analytics?days=&goal=` + visit filters | `Traffic` |
+| `GET /events?days=` | `{ name, count, visits, value }[]` tracked events |
+| `GET /errors?days=` | `ErrorGroup[]` most visits affected first |
+| `GET /errors/{fingerprint}?days=` | `{ group: ErrorGroup, occurrences: Occurrence[] /* latest 50 */ }` or 404 |
+| `GET /friction?days=` | `{ pages: { path, visits, rage, dead, errors }[], elements: { kind: "rage"|"dead", path, selector, label, count, visits, visitId, ts }[] }` |
+| `GET /requests?days=` | `{ name, count, failed, visits, avgMs, status, visitId, ts, lastSeen }[]` |
+| `GET /vitals?days=` | `{ path, samples, lcp, inp, cls, fcp, ttfb }[]` 75th percentiles; `path: ""` first, for the whole site; `-1` was never measured |
+| `GET /funnels?days=` | `{ id, name, steps: (Step & { visits, dropped, watchable })[] }[]` |
+| `GET /funnels/{fid}/dropoffs?step=&days=` | `{ items: Recording[], visits }` recordings of visits that reached the step (0 is the first) and not the next |
+| `GET /heatmaps?days=` | `{ path, count }[]` pages with clicks |
+| `GET /heatmap?path=&device=Desktop|Tablet|Mobile&days=` | `Heatmap` |
+| `GET /retention` | `{ daily, weekly, monthly, cohorts: { week, size, active: number[] }[] }` 8 weekly cohorts, oldest first |
+| `GET /releases?days=` | `{ release, firstSeen, lastSeen, sessions, errors, friction }[]` among recordings |
+| `GET /accounts` | `{ domain, people, sessions, lastSeen }[]` identified visitors by the domain of their email; personal mail domains are left out |
+
+```ts
+Traffic = { totals: Totals, previous: Totals, days: { date, visitors, visits, pageviews }[],
+            sources, channels, campaigns, entryPages, exitPages, countries, devices, browsers, systems, languages: { name, visitors, visits }[] /* top 10 */,
+            pages: { path, views, visitors, avgTimeMs, exits, scroll }[] /* top 20 */,
+            goals: (Goal & { conversions })[], goalSources: { name, count }[] /* for ?goal= */ }
+Totals = { visitors, visits, pageviews, bounces, avgDurationMs, newVisitors, returning }
+ErrorGroup = { fingerprint, message, source, count, visits, firstSeen, lastSeen, path }
+Occurrence = { visitId, ts, path, label, props, browser, os, release, recorded, startedAt }   // recorded: recording visitId exists; open it at ts - startedAt
+Heatmap = { clicks, cells: { x /* percent of the page width */, y /* steps of 10 px */, n }[], elements: { selector, label, count }[],
+            views, scroll: number[10] /* views that reached 10% ... 100% */, height, width, snapshot: { recordingId, ts, startedAt } | null }
+```
+
+- A bounce is a visit with one page view, no click or tracked event, and under 10 s engaged.
+- A funnel counts visits that did its steps in order within the window; one event advances at most one step.
+- Heatmap device classes go by viewport width: Mobile under 768, Tablet under 1024, Desktop from there. `snapshot` names a recording that shows the page, already masked in the browser, to draw under the map.
+- Cohorts and the active counts leave out cookieless visitors, who get a new identity every day.
+
+### Notes, public links, feedback, alerts
+
+| Method and path | Body | Returns |
+|---|---|---|
+| `GET /projects/{id}/recordings/{rid}/notes` | | `Note[]` by time in the recording |
+| `POST /projects/{id}/recordings/{rid}/notes` | `{ atMs, body }` | `Note` (member) |
+| `DELETE /projects/{id}/recordings/{rid}/notes/{nid}` | | 204 (member) |
+| `GET /projects/{id}/shares` | | `Share[]` live links (admin) |
+| `POST /projects/{id}/shares` | `{ kind: "recording"|"dashboard", recordingId?, startMs?, expiresInDays: 1|7|30 }` | `Share & { link }` (admin); `403` while `sharing.enabled` is false |
+| `DELETE /projects/{id}/shares/{sid}` | | 204 (admin) |
+| `GET /shared/{token}` (public) | | `{ kind, project, expiresAt, startMs, recording?: { startedAt, durationMs, viewport, pages, device, browser, os, live } }` |
+| `GET /shared/{token}/events?after=` (public) | | as `GET .../recordings/{rid}/events`, for a recording link |
+| `GET /shared/{token}/analytics?days=` (public) | | `Traffic`, for a dashboard link |
+| `GET /projects/{id}/feedback?page=&limit=` | | `{ items: Feedback[], total, unseen }` newest first |
+| `PATCH /projects/{id}/feedback/{fid}` | `{ seen }` | 204 (member) |
+| `DELETE /projects/{id}/feedback/{fid}` | | 204 (member) |
+| `POST /projects/{id}/alerts/test` | | 204, or `400` with why the webhook refused (admin) |
+| `POST /projects/{id}/alerts/digest` | | 204: sends the weekly digest now (admin) |
+
+`Note = { id, recordingId, userId, author, atMs, body, createdAt }`, `Share = { id, kind, recordingId, startMs, createdBy, author, createdAt, expiresAt }`, `Feedback = { id, visitId, path, body, email, createdAt, seen, recorded, startedAt }`.
+
+- Public links are off until an admin sets `sharing.enabled`. The link is `{KIMMI_PUBLIC_URL}/shared/{token}`; the token is shown once and only its hash is stored. A link answers `404` once it expires or is revoked, when its recording or project is deleted, and while `sharing.enabled` is false. A recording link shows the replay and nothing about the visitor.
+- Alerts go to one webhook per project (`alerts.webhookUrl`; nothing is sent without one): `POST` with `Content-Type: application/json`, `X-Kimmi-Event`, and `X-Kimmi-Signature: sha256=<hex HMAC-SHA256 of the body with alerts.secret>` when a secret is set. Body: `{ event, project: { id, name }, at, title, text, url, data }`. Events: `error.new` (a fingerprint the project has not seen), `error.spike` and `rage.spike` (the last hour reached the threshold; at most once an hour), `traffic.none` (no visit for 24 hours; at most once a day), `feedback.new`, `digest.weekly` (Monday from 08:00 in the project's time zone: the last seven days), `test`. A delivery times out after 5 seconds, follows no redirect and is not retried. `GET /settings` shows `webhookUrl` as `hidden` and `secret` as empty to anyone below admin.
+
+### MCP
+
+`POST /mcp` speaks the Model Context Protocol (streamable HTTP, one JSON response per JSON-RPC request; `GET /mcp` answers `405`), authenticated like the API with `Authorization: Bearer km_sec_...`. It only reads. Tools: `list_projects`, `get_traffic`, `list_events`, `list_errors`, `get_error`, `get_friction`, `list_funnels`, `get_performance`, `list_recordings`, `list_feedback`; each project tool takes `project` (id or slug) and `days`.
 
 ### Visitors
 
@@ -317,4 +448,4 @@ Live = { visitors, activeLast5m, pages: { path, count }[], countries: { code, na
 
 ## Static
 
-`/kimmi.js` serves the SDK IIFE bundle (5-minute cache). Every response carries `X-Content-Type-Options: nosniff`, and `Strict-Transport-Security: max-age=31536000` when `KIMMI_PUBLIC_URL` is https (cookies are then `Secure`). Dashboard and API responses also carry `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Opener-Policy: same-origin` and a `Content-Security-Policy` that loads scripts only from the server (`script-src 'self'`, no inline or eval) but lets the rrweb player's sandboxed `about:blank` iframe, which inherits the policy, render recorded pages: inline styles and `<style>` elements, and images, fonts, media and stylesheets from any http(s) origin and `data:`/`blob:` URLs. `/i` responses carry neither. Every other path that is not `/api` or `/i` serves the dashboard `index.html` (single-page app, `no-cache`) or its assets (`assets/*` cached for a year). `GET /healthz` answers `ok` for load balancers. Nodes without the `api` role serve only `/kimmi.js`, `/i` and `/healthz`.
+`/kimmi.js` serves the SDK IIFE bundle and `/kimmi-feedback.js` the feedback button, loaded only when a site shows it (5-minute cache each). Every response carries `X-Content-Type-Options: nosniff`, and `Strict-Transport-Security: max-age=31536000` when `KIMMI_PUBLIC_URL` is https (cookies are then `Secure`). Dashboard and API responses also carry `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Cross-Origin-Opener-Policy: same-origin` and a `Content-Security-Policy` that loads scripts only from the server (`script-src 'self'`, no inline or eval) but lets the rrweb player's sandboxed `about:blank` iframe, which inherits the policy, render recorded pages: inline styles and `<style>` elements, and images, fonts, media and stylesheets from any http(s) origin and `data:`/`blob:` URLs. `/i` responses carry neither. Every other path that is not `/api` or `/i` serves the dashboard `index.html` (single-page app, `no-cache`) or its assets (`assets/*` cached for a year). `GET /healthz` answers `ok` for load balancers. Nodes without the `api` role serve only `/kimmi.js`, `/kimmi-feedback.js`, `/i` and `/healthz`. `/shared/{token}` is the dashboard's public page for a link.
