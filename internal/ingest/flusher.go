@@ -28,6 +28,10 @@ type FlushStore interface {
 // partly filled slab) and the slabs, written in order, are the live object.
 const slabSize = 256 << 10
 
+// hitFlushAt is how much analytics a segment may hold before it is written
+// without waiting for the interval, so a burst of hits stays small in memory.
+const hitFlushAt = 2 << 20
+
 var slabs = sync.Pool{New: func() any { b := make([]byte, slabSize); return &b }}
 
 // segment is one run of buffered batches. Block offsets are relative to the
@@ -41,6 +45,7 @@ type segment struct {
 	// retry only applies the hits.
 	hits       []store.Hit
 	hitBytes   map[string]int64
+	hitSize    int64
 	blocksDone bool
 }
 
@@ -145,6 +150,13 @@ func (f *Flusher) AddHit(h store.Hit, size int64) error {
 	f.cur.hitBytes[h.ProjectID] += size
 	f.size += size
 	f.byProject[h.ProjectID] += size
+	f.cur.hitSize += size
+	if f.cur.hitSize >= hitFlushAt {
+		select {
+		case f.kick <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 

@@ -194,7 +194,7 @@ func (h *Handler) hit(w http.ResponseWriter, r *http.Request) {
 			out.Events = append(out.Events, ev)
 		}
 	}
-	if err := h.Flusher.AddHit(out, int64(len(body))); err != nil {
+	if err := h.Flusher.AddHit(out, hitCost(len(body), len(out.Events))); err != nil {
 		w.Header().Set("Retry-After", "2")
 		h.reject(w, http.StatusServiceUnavailable)
 		return
@@ -202,6 +202,12 @@ func (h *Handler) hit(w http.ResponseWriter, r *http.Request) {
 	h.Stats.Accepted.Add(1)
 	h.Stats.Bytes.Add(int64(len(body)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// hitCost is what a parsed hit holds in memory until it is written: its
+// strings (about the body again) and a fixed part per hit and per event.
+func hitCost(body, events int) int64 {
+	return int64(body) + 512 + int64(events)*192
 }
 
 // event checks one posted event and turns it into an index row.

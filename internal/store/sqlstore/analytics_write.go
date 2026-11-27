@@ -27,7 +27,7 @@ type visitDelta struct {
 	engaged   int64
 	entry     string
 	exit      string
-	events    []store.Event
+	events    [][]store.Event // each hit's events, not copied
 	returning bool
 }
 
@@ -107,7 +107,9 @@ func aggregateVisits(ctx context.Context, c conn, hits []store.Hit) ([]*visitDel
 				v.engaged += int64(e.Value)
 			}
 		}
-		v.events = append(v.events, h.Events...)
+		if len(h.Events) > 0 {
+			v.events = append(v.events, h.Events)
+		}
 	}
 
 	ids := make([]string, len(out))
@@ -195,29 +197,33 @@ func (d *DB) upsertVisits(ctx context.Context, c conn, deltas []*visitDelta) err
 }
 
 func insertEvents(ctx context.Context, c conn, deltas []*visitDelta) error {
-	type row struct {
-		v *visitDelta
-		e store.Event
-	}
-	var all []row
-	for _, v := range deltas {
-		for _, e := range v.events {
-			all = append(all, row{v, e})
-		}
-	}
 	const cols = 14
-	for part := range slices.Chunk(all, rowsPerStatement) {
-		args := make([]any, 0, len(part)*cols)
-		for _, r := range part {
-			e := r.e
-			args = append(args, r.v.first.OrgID, r.v.first.ProjectID, r.v.id, e.Ts, e.Kind, e.Path, e.Name, e.Label, e.Value, e.X, e.Y, e.W, e.Num, e.Props)
+	args := make([]any, 0, rowsPerStatement*cols)
+	flush := func() error {
+		if len(args) == 0 {
+			return nil
 		}
-		if _, err := c.exec(ctx, `INSERT INTO events (org_id, project_id, visit_id, ts, kind, path, name, label, value, x, y, w, num, props)
-			VALUES `+valueRows(len(part), cols), args...); err != nil {
+		_, err := c.exec(ctx, `INSERT INTO events (org_id, project_id, visit_id, ts, kind, path, name, label, value, x, y, w, num, props)
+			VALUES `+valueRows(len(args)/cols, cols), args...)
+		args = args[:0]
+		if err != nil {
 			return fmt.Errorf("insert events: %w", err)
 		}
+		return nil
 	}
-	return nil
+	for _, v := range deltas {
+		for _, batch := range v.events {
+			for _, e := range batch {
+				args = append(args, v.first.OrgID, v.first.ProjectID, v.id, e.Ts, e.Kind, e.Path, e.Name, e.Label, e.Value, e.X, e.Y, e.W, e.Num, e.Props)
+				if len(args) == rowsPerStatement*cols {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return flush()
 }
 
 func (d *DB) DaySalt(ctx context.Context, day string) (string, error) {

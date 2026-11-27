@@ -58,6 +58,7 @@ Sizes take a plain byte count or a `KB`/`MB`/`GB` (powers of 1000) or `KiB`/`MiB
 A node's memory is bounded by its settings, not by its traffic:
 
 - Ingest holds at most `KIMMI_INGEST_BUFFER` of batches waiting to be written (a failed write keeps them, still counted), and reads at most another `KIMMI_INGEST_BUFFER` of request bodies at once (one body of up to 5 MB is always let through). Past either, batches get `503`. Live objects stream to storage from the buffer itself; nothing is copied into one big object first, and S3 uploads are single streamed PUTs.
+- Analytics hits count against the same buffer (their body, plus a fixed part per hit and per event) and are written early once 2 MiB of them wait, so a burst of hits gets `503` instead of memory.
 - The worker seals one recording at a time, streaming each block event by event; it holds one sealed object of about 8 MiB, one 1 MiB chunk and one event (at most 64 MiB).
 - The events endpoint streams block by block, holding one block or one sealed chunk at a time.
 - With the defaults a node idles near 20 MB resident and stays under about 150 MB at full ingest speed. The Go runtime's soft limit is `KIMMI_MEMORY_LIMIT`, and a node that goes quiet returns freed memory to the operating system within about 15 seconds.
