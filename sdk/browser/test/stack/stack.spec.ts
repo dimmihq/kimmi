@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { mkdirSync } from 'node:fs';
 import { expect, request, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
-import { HOOK_PORT, KEY, KIMMI, SHOP_PORT } from './playwright.config';
+import { HOOK_PORT, KEY, KIMMI, NEXT_KEY, NEXT_PORT, SHOP_PORT } from './playwright.config';
 
 // Visitors use the example shop; then the API and the dashboard are checked for what they did.
 
@@ -449,10 +449,65 @@ test('settings, filters and the analytics link work from the dashboard', async (
   await context.close();
 });
 
+test('the Next.js example is counted and recorded too', async ({ browser }) => {
+  const projects = (await (await api.get('/api/v1/projects')).json()) as { id: string; publicKey: string }[];
+  const site = projects.find((item) => item.publicKey === NEXT_KEY)!.id;
+  const config = await api.patch(`/api/v1/projects/${site}/settings`, { data: { capture: { minDurationMs: 0 }, analytics: { enabled: true, cookieless: false } } });
+  expect(config.status(), await config.text()).toBe(200);
+  const read = async <T>(path: string, params?: Record<string, string | number>) =>
+    (await (await api.get(`/api/v1/projects/${site}${path}`, { params })).json()) as T;
+  const before = (await read<{ totals: { pageviews: number } }>('/analytics', { days: 1 })).totals.pageviews;
+  const recorded = (await read<{ total: number }>('/recordings')).total;
+
+  await visitor(browser, async (page) => {
+    await page.goto(`http://localhost:${NEXT_PORT}/?utm_source=stack-test`);
+    await page.waitForTimeout(800);
+    await page.getByTestId('nav-pricing').click();
+    await expect(page.getByRole('heading', { name: 'Pricing' })).toBeVisible();
+    await page.evaluate((id) => {
+      setTimeout(() => {
+        throw new Error(`Plan table failed to load ${id}`);
+      });
+    }, run);
+    await page.waitForTimeout(800);
+  });
+
+  await expect.poll(async () => (await read<{ totals: { pageviews: number } }>('/analytics', { days: 1 })).totals.pageviews, { timeout: 15_000 }).toBe(before + 2);
+  const traffic = await read<{ pages: { path: string }[]; sources: { name: string }[] }>('/analytics', { days: 1 });
+  expect(traffic.pages.map((page) => page.path)).toEqual(expect.arrayContaining(['/', '/pricing']));
+  expect(traffic.sources.map((source) => source.name)).toContain('stack-test');
+  const errors = await read<{ message: string; fingerprint: string }[]>('/errors', { days: 1 });
+  const group = errors.find((item) => item.message.includes(run))!;
+  expect(group, 'the error thrown in the Next.js page').toBeTruthy();
+  const detail = await read<{ occurrences: { recorded: boolean; path: string }[] }>(`/errors/${group.fingerprint}`, { days: 1 });
+  expect(detail.occurrences[0]).toMatchObject({ recorded: true, path: '/pricing' });
+  expect((await read<{ total: number }>('/recordings')).total).toBe(recorded + 1);
+
+  // Its dashboard pages render with that data.
+  const context = await browser.newContext({ storageState: await api.storageState(), viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  await page.goto(`${KIMMI}/projects/${site}/analytics?days=1`);
+  await expect(page.getByText('/pricing').first()).toBeVisible();
+  await expect(page.getByText('stack-test').first()).toBeVisible();
+  await page.goto(`${KIMMI}/projects/${site}/errors?days=1`);
+  await page.getByText(`Plan table failed to load ${run}`).first().click();
+  await page.getByRole('link', { name: /watch/i }).first().click();
+  await expect(page.locator('iframe').first()).toBeVisible({ timeout: 20_000 });
+  await shot(page, '23-nextjs-replay');
+  await context.close();
+});
+
 test('a signed-out visitor can watch the shared recording, until it is revoked', async ({ browser }) => {
   expect(shareLink, 'the link the dashboard created').toMatch(/\/shared\//);
   const context = await browser.newContext();
   const page = await context.newPage();
+  // Everything the public page is sent, to check it against what it shows.
+  const sent: { url: string; body: string }[] = [];
+  page.on('response', async (response) => {
+    const url = new URL(response.url());
+    if (url.origin !== new URL(KIMMI).origin || !/^\/(api|i|mcp)\b/.test(url.pathname)) return;
+    sent.push({ url: url.pathname, body: await response.text().catch(() => '') });
+  });
   await page.goto(shareLink);
   await expect(page.getByText(/shared recording/i)).toBeVisible();
   await expect(page.locator('iframe').first()).toBeVisible({ timeout: 20_000 });
@@ -460,6 +515,32 @@ test('a signed-out visitor can watch the shared recording, until it is revoked',
   // Signed out: the dashboard itself is closed.
   const closed = await context.request.get(`${KIMMI}/api/v1/projects/${project}/recordings`);
   expect(closed.status()).toBe(401);
+
+  // The page asked for the link and its events, and for nothing else.
+  const token = shareLink.slice(shareLink.lastIndexOf('/') + 1);
+  await expect.poll(() => sent.some((response) => response.url.endsWith('/events'))).toBe(true);
+  expect([...new Set(sent.map((response) => response.url))].sort()).toEqual([`/api/v1/shared/${token}`, `/api/v1/shared/${token}/events`]);
+  const link = JSON.parse(sent.find((response) => response.url === `/api/v1/shared/${token}`)!.body) as Record<string, unknown>;
+  expect(Object.keys(link).sort()).toEqual(['expiresAt', 'kind', 'project', 'recording', 'startMs']);
+  expect(Object.keys(link.recording as object).sort()).toEqual(['browser', 'device', 'durationMs', 'live', 'os', 'pages', 'startedAt', 'viewport']);
+  const stream = sent.find((response) => response.url.endsWith('/events'))!.body;
+  const events = (JSON.parse(stream) as { events: { type: number; data: { tag?: string; payload?: Record<string, unknown> } }[] }).events;
+  expect(events.length).toBeGreaterThan(10);
+  expect([...new Set(events.map((event) => event.type))].every((type) => type >= 0 && type <= 5)).toBe(true);
+  const custom = events.filter((event) => event.type === 5);
+  expect(custom.length, 'navigations are sent').toBeGreaterThan(0);
+  for (const event of custom) {
+    expect(event.data.tag).toBe('navigate');
+    expect(Object.keys(event.data.payload!).sort()).toEqual(['href', 'path', 'title']);
+  }
+  // The same recording, signed in, does hold the console and network data the public answer must not.
+  const share = (await get<{ recordingId: string }[]>('/shares')).find((item) => item.recordingId)!;
+  const full = await (await api.get(`/api/v1/projects/${project}/recordings/${share.recordingId}/events`, { params: { after: -1 } })).text();
+  for (const hidden of ['"tag":"console"', '"tag":"network"', '"tag":"error"', '"tag":"rage-click"', '"tag":"track"', 'Stock lookup failed', '/api/stock/', 'Gift card balance service']) {
+    expect(full, `the signed-in stream holds ${hidden}`).toContain(hidden);
+    expect(stream, `the public stream must not hold ${hidden}`).not.toContain(hidden);
+  }
+  for (const response of sent) expect(response.body).not.toContain(share.recordingId);
 
   const shares = await get<{ id: string }[]>('/shares');
   for (const share of shares) await api.delete(`/api/v1/projects/${project}/shares/${share.id}`);
