@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dimmihq/kimmi/internal/settings"
@@ -71,6 +72,8 @@ type Notifier struct {
 	Client *http.Client
 
 	queue chan func(ctx context.Context)
+	// offset moves the clock alerts go by; only tests set it.
+	offset atomic.Int64
 
 	mu        sync.Mutex
 	announced map[string]bool      // project + fingerprint already alerted on by this process
@@ -84,6 +87,12 @@ func New(s store.Store, log *slog.Logger, publicURL, version string, lookup func
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		queue: make(chan func(ctx context.Context), 64), announced: map[string]bool{}, checked: map[string]time.Time{}}
 }
+
+// Now is the time alerts go by: the real time, unless a test moved it.
+func (n *Notifier) Now() time.Time { return time.Now().Add(time.Duration(n.offset.Load())) }
+
+// SetOffset moves the clock alerts go by. For tests only.
+func (n *Notifier) SetOffset(d time.Duration) { n.offset.Store(int64(d)) }
 
 // Run delivers queued work until ctx ends.
 func (n *Notifier) Run(ctx context.Context) {
@@ -196,7 +205,7 @@ func (n *Notifier) newErrors(ctx context.Context, p Project, errs []seen) {
 // spike fires when the last hour holds at least threshold events of kind,
 // at most once an hour, counting at most once a minute.
 func (n *Notifier) spike(ctx context.Context, p Project, kind, event string, threshold int, noun, page string) {
-	now := time.Now()
+	now := n.Now()
 	key := p.ID + " " + event
 	n.mu.Lock()
 	recent := now.Sub(n.checked[key]) < time.Minute
@@ -396,7 +405,7 @@ func (n *Notifier) Send(ctx context.Context, p Project, payload Payload) error {
 	}
 	payload.Project = ProjectRef{ID: p.ID, Name: p.Name}
 	if payload.At == 0 {
-		payload.At = time.Now().UnixMilli()
+		payload.At = n.Now().UnixMilli()
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

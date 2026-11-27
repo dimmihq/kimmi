@@ -18,17 +18,20 @@ import (
 var platforms = project.Platforms
 
 type projectView struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	Slug          string             `json:"slug"`
-	Platform      string             `json:"platform"`
-	Origin        string             `json:"origin"`
-	Timezone      string             `json:"timezone"`
-	PublicKey     string             `json:"publicKey"`
-	Origins       []string           `json:"origins"`
-	RetentionDays int                `json:"retentionDays"`
-	CreatedAt     int64              `json:"createdAt"`
-	Stats         store.ProjectStats `json:"stats"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Slug          string   `json:"slug"`
+	Platform      string   `json:"platform"`
+	Origin        string   `json:"origin"`
+	Timezone      string   `json:"timezone"`
+	PublicKey     string   `json:"publicKey"`
+	Origins       []string `json:"origins"`
+	RetentionDays int      `json:"retentionDays"`
+	CreatedAt     int64    `json:"createdAt"`
+	// Analytics says visit counting is on: the dashboard shows the
+	// analytics pages only then.
+	Analytics bool               `json:"analytics"`
+	Stats     store.ProjectStats `json:"stats"`
 }
 
 // dayOffset is how far the project's time zone is ahead of UTC right now, so
@@ -63,7 +66,8 @@ func (a *API) views(r *http.Request, projects []store.Project) ([]projectView, e
 	out := make([]projectView, len(projects))
 	for i, p := range projects {
 		out[i] = projectView{ID: p.ID, Name: p.Name, Slug: p.Slug, Platform: p.Platform, Origin: p.Origin, Timezone: p.Timezone,
-			PublicKey: p.PublicKey, Origins: p.Origins, RetentionDays: p.RetentionDays, CreatedAt: p.CreatedAt, Stats: stats[p.ID]}
+			PublicKey: p.PublicKey, Origins: p.Origins, RetentionDays: p.RetentionDays, CreatedAt: p.CreatedAt,
+			Analytics: projectSettings(p).Analytics.Enabled, Stats: stats[p.ID]}
 	}
 	return out, nil
 }

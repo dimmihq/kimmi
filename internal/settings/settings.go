@@ -79,7 +79,9 @@ type Funnel struct {
 	Steps []Step `json:"steps"`
 }
 
-// Analytics controls visit counting, which runs beside recording.
+// Analytics controls visit counting, which runs beside recording. It is
+// off until a project turns it on: a project that only records stays as
+// simple as it was.
 type Analytics struct {
 	Enabled bool `json:"enabled"`
 	// Cookieless counts visits without storing anything in the browser;
@@ -158,7 +160,7 @@ func Default() Settings {
 		Capture: Capture{SampleRate: 100, Console: true, Network: true, Performance: true, Frustration: true,
 			MinDurationMs: 2000, IdleTimeoutMs: 900000, MaxLengthMs: 3600000, URLRules: []URLRule{}},
 		Retention: Retention{Days: 30, KeepStarred: true},
-		Analytics: Analytics{Enabled: true, AutoEvents: true, Heatmaps: true, RetentionDays: 365, Goals: []Goal{}, Funnels: []Funnel{}},
+		Analytics: Analytics{AutoEvents: true, Heatmaps: true, RetentionDays: 365, Goals: []Goal{}, Funnels: []Funnel{}},
 		Feedback:  Feedback{Button: "hidden"},
 		Alerts:    Alerts{NewErrors: true, ErrorSpike: 10, RageSpike: 10, Feedback: true, WeeklyDigest: true},
 	}

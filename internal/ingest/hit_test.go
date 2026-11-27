@@ -18,6 +18,7 @@ func newHitHandler(t *testing.T, change func(*settings.Settings)) (*fakeStore, *
 	b, _ := blob.NewLocal(t.TempDir())
 	st := &fakeStore{}
 	set := settings.Default()
+	set.Analytics.Enabled = true
 	if change != nil {
 		change(&set)
 	}

@@ -78,6 +78,8 @@ export interface Project {
   origins: string[];
   retentionDays: number;
   createdAt: number;
+  /** Visit counting is on: the analytics pages exist only then. */
+  analytics: boolean;
   stats: ProjectStats;
 }
 

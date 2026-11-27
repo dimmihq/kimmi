@@ -42,6 +42,9 @@ type Handler struct {
 	Salts      *Salts
 	Feedback   FeedbackStore
 	OnFeedback func(f store.Feedback)
+	// TrustClock lets a hit say when it happened (its `at`), so tests and
+	// demo data can fill the past. Off, a hit happened when it arrived.
+	TrustClock bool
 
 	reading atomic.Int64
 }

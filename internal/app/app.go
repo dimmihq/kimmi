@@ -88,6 +88,10 @@ func New(ctx context.Context, cfg config.Config, version, commit string, log *sl
 		return notify.Project{ID: p.ID, Name: p.Name, Timezone: p.Timezone, Alerts: p.Settings.Alerts}, true
 	})
 	a.Worker.Notify = a.Notify
+	if cfg.TestHooks {
+		a.Worker.AlertEvery = 2 * time.Second
+		log.Warn("KIMMI_TEST_HOOKS is on: this instance trusts clients about time; never use it in production")
+	}
 
 	proxies := guard.Proxies{Trusted: cfg.TrustedProxies}
 	stats := &ingest.Stats{}
@@ -102,7 +106,7 @@ func New(ctx context.Context, cfg config.Config, version, commit string, log *sl
 		a.Flusher.OnHits = a.Notify.Hits
 		(&ingest.Handler{Cache: a.Cache, Flusher: a.Flusher, Stats: stats, Proxies: proxies,
 			Limit: guard.NewLimiter(cfg.IngestRate, cfg.IngestBurst), MaxReading: cfg.IngestBuffer,
-			Salts: &ingest.Salts{Store: db}, Feedback: db, OnFeedback: a.Notify.Feedback}).Register(mux)
+			Salts: &ingest.Salts{Store: db}, Feedback: db, OnFeedback: a.Notify.Feedback, TrustClock: cfg.TestHooks}).Register(mux)
 	}
 	if cfg.Has(config.RoleAPI) {
 		svc := &api.API{Store: db, Blob: b, Source: source, Worker: a.Worker, Signer: auth.NewSigner(cfg.Secret),

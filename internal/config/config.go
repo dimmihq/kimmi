@@ -36,6 +36,10 @@ type Config struct {
 
 	// DebugAddr serves net/http/pprof when set; never the public listener.
 	DebugAddr string
+	// TestHooks is for kimmi's own tests and demo data, never production:
+	// analytics hits may say when they happened, the clock of alerts can
+	// be moved, and alerts that follow the clock are checked every 2 s.
+	TestHooks bool
 	// MemoryLimit is the Go runtime's soft memory limit in bytes (0: none).
 	// GOMEMLIMIT, when set, wins and MemoryLimit is left at 0.
 	MemoryLimit int64
@@ -172,6 +176,7 @@ func Load(getenv func(string) string) (Config, error) {
 		return n
 	}
 	c.DebugAddr = get("KIMMI_DEBUG_ADDR", "")
+	c.TestHooks = get("KIMMI_TEST_HOOKS", "") == "1"
 	if strings.TrimSpace(getenv("GOMEMLIMIT")) == "" {
 		c.MemoryLimit = size("KIMMI_MEMORY_LIMIT", "256MiB")
 	}

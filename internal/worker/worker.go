@@ -54,9 +54,10 @@ type Worker struct {
 	Blob   blob.Store
 	Source *replay.Source
 	Log    *slog.Logger
-	// Notify, when set, gets the projects every few minutes for the alerts
-	// that follow the clock.
-	Notify *notify.Notifier
+	// Notify, when set, gets the projects every AlertEvery (5 minutes when
+	// zero) for the alerts that follow the clock.
+	Notify     *notify.Notifier
+	AlertEvery time.Duration
 
 	cleaning sync.Mutex
 	sealing  sync.Mutex // one sealing run at a time, so its memory is bounded
@@ -347,10 +348,13 @@ func (w *Worker) alerts(ctx context.Context) {
 	}
 	list := make([]notify.Project, 0, len(projects))
 	for _, p := range projects {
-		list = append(list, notify.Project{ID: p.ID, Name: p.Name, Timezone: p.Timezone,
-			Alerts: settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred).Alerts})
+		// The digest and the silence alert are about visits: a project
+		// that does not count them gets neither.
+		if set := settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred); set.Analytics.Enabled {
+			list = append(list, notify.Project{ID: p.ID, Name: p.Name, Timezone: p.Timezone, Alerts: set.Alerts})
+		}
 	}
-	w.Notify.Periodic(ctx, list, time.Now())
+	w.Notify.Periodic(ctx, list, w.Notify.Now())
 }
 
 // LastSeal reports when sealing last ran and how it went.
@@ -366,7 +370,11 @@ func (w *Worker) Run(ctx context.Context, idle time.Duration) {
 	collect := time.NewTicker(5 * time.Minute)
 	partitions := time.NewTicker(time.Hour)
 	cleanup := time.NewTimer(time.Minute)
-	alerts := time.NewTicker(5 * time.Minute)
+	every := w.AlertEvery
+	if every <= 0 {
+		every = 5 * time.Minute
+	}
+	alerts := time.NewTicker(every)
 	defer alerts.Stop()
 	defer seal.Stop()
 	defer collect.Stop()

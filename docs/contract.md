@@ -49,6 +49,7 @@ Environment variables only (compose loads `.env`). No config file.
 | `KIMMI_INGEST_BUFFER` | `64MiB` | Most batch bytes an ingest node holds before writing them (past it: `503`). It also caps the batch bodies being read at once |
 | `KIMMI_INGEST_PROJECT_BUFFER` | half of `KIMMI_INGEST_BUFFER` | One project's share of the buffer (past it: `503` for that project only) |
 | `KIMMI_MEMORY_LIMIT` | `256MiB` | Soft memory limit of the Go runtime (`0`: none). `GOMEMLIMIT`, when set, wins. Not a hard cap: near it the collector works harder |
+| `KIMMI_TEST_HOOKS` | none | `1` is for kimmi's own tests and demo data, never production: a hit may say when it happened (`at`), `POST /api/v1/test/clock { offsetMs }` (owner) moves the clock alerts go by, and the alerts that follow the clock are checked every 2 seconds instead of every 5 minutes. A warning is logged at start |
 | `KIMMI_DEBUG_ADDR` | none | Serves `net/http/pprof` under `/debug/pprof/` on this separate address (e.g. `127.0.0.1:6060`). Never exposed on the public listener; keep it off the network |
 
 Sizes take a plain byte count or a `KB`/`MB`/`GB` (powers of 1000) or `KiB`/`MiB`/`GiB` suffix. Rate limits are in memory and per process.
@@ -143,7 +144,7 @@ CORS: any origin, no credentials. A project's `origins` list, when not empty, is
                "frustration": true, "crossOriginIframes": false, "startOnError": false,
                "minDurationMs": 2000, "idleTimeoutMs": 900000, "maxLengthMs": 3600000,
                "urlRules": [ { "type": "contains", "pattern": "/checkout" } ] },
-  "analytics": { "enabled": true, "cookieless": false, "autoEvents": true, "heatmaps": true },
+  "analytics": { "enabled": false, "cookieless": false, "autoEvents": true, "heatmaps": true },
   "feedback": { "button": "hidden" }
 }
 ```
@@ -241,7 +242,7 @@ kimmi.feedback(text: string, options?: { email?: string })
 kimmi.showFeedback(position?: 'bottom-right' | 'bottom-left') // loads {host}/kimmi-feedback.js and shows the button
 ```
 
-Analytics start when `analytics.enabled`, independently of `sampleRate`, `urlRules`, `minDurationMs` and `startOnError`. A visit is named, in order: by the running recording session; when `analytics.cookieless`, by nothing kept in the browser (an id in memory for the page load, an empty `anonymousId`); otherwise by the anonymous id in `localStorage` and a visit in `sessionStorage` (`kimmi.visit`, 30 minutes of inactivity), when consent allows storage. `optOut()` and Do Not Track (with `privacy.respectDnt`) stop analytics too. With `analytics.cookieless` the recorder waits for `kimmi.optIn()` as if `privacy.requireConsent` were on, and nothing is written to `localStorage` or `sessionStorage` before that. Every string in a hit goes through the same scrubbing as console, network and error text; click text of a masked element is empty; link targets of `mailto:` and `tel:` are never sent.
+Analytics are off until a project turns them on (`analytics.enabled`, default `false`): a project that only records sends no hits, and its dashboard shows no analytics pages. `Project.analytics` in the dashboard API says which it is. Analytics start when `analytics.enabled`, independently of `sampleRate`, `urlRules`, `minDurationMs` and `startOnError`. A visit is named, in order: by the running recording session; when `analytics.cookieless`, by nothing kept in the browser (an id in memory for the page load, an empty `anonymousId`); otherwise by the anonymous id in `localStorage` and a visit in `sessionStorage` (`kimmi.visit`, 30 minutes of inactivity), when consent allows storage. `optOut()` and Do Not Track (with `privacy.respectDnt`) stop analytics too. With `analytics.cookieless` the recorder waits for `kimmi.optIn()` as if `privacy.requireConsent` were on, and nothing is written to `localStorage` or `sessionStorage` before that. Every string in a hit goes through the same scrubbing as console, network and error text; click text of a masked element is empty; link targets of `mailto:` and `tel:` are never sent.
 
 Script tag: `<script src="{host}/kimmi.js" data-key="km_pub_..." defer></script>` auto-inits and exposes `window.kimmi`. Flush every 2 s and on `visibilitychange`/`pagehide` (beacon). Session id and seq live in `sessionStorage`; a session ends after `idleTimeoutMs` without activity or at `maxLengthMs`, and a new one starts with a fresh full snapshot.
 
@@ -304,7 +305,7 @@ Base `/api/v1`. JSON. Auth: cookie `kimmi_session` (HttpOnly, SameSite=Lax) set 
 | `POST /projects/{id}/delete-recordings` | `{ olderThanDays?: number }` (omitted: all) | `{ deleted: number }` |
 
 ```ts
-Project = { id, name, slug, platform, origin, timezone, publicKey, origins: string[], retentionDays, createdAt,
+Project = { id, name, slug, platform, origin, timezone, publicKey, origins: string[], retentionDays, createdAt, analytics: boolean,
             stats: { recordings24h, live, avgDurationMs, storageBytes, recordings, series: number[] /* 30 daily counts, oldest first */, lastRecordingAt: number|null } }
 ProjectSettings = { privacy: {...as in /i/v1/config, including scrubEmails and scrubPhones}, capture: {...as in /i/v1/config, plus sampleRate}, retention: { days: 7|30|90|365, keepStarred: boolean },
                     analytics: { enabled, cookieless, autoEvents, heatmaps: boolean, retentionDays: 30|90|365|730, goals: Goal[] /* at most 20 */, funnels: Funnel[] /* at most 10 */ },

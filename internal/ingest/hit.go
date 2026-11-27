@@ -81,6 +81,8 @@ type hitBody struct {
 	Timezone string     `json:"timezone"`
 	Release  string     `json:"release"`
 	Events   []hitEvent `json:"events"`
+	// At is honoured only with Handler.TrustClock.
+	At int64 `json:"at"`
 }
 
 type hitEvent struct {
@@ -175,6 +177,9 @@ func (h *Handler) hit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	if h.TrustClock && in.At > 0 {
+		now = time.UnixMilli(in.At)
+	}
 	key, cookieless, err := h.visitorKey(r, p, in.AnonymousID, now)
 	if err != nil {
 		w.Header().Set("Retry-After", "2")

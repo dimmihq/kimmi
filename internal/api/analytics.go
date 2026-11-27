@@ -44,6 +44,10 @@ func (a *API) analyticsRoutes(m *http.ServeMux, p string) {
 	m.HandleFunc("POST "+p+"/alerts/test", a.project(store.RoleAdmin, a.testWebhook))
 	m.HandleFunc("POST "+p+"/alerts/digest", a.project(store.RoleAdmin, a.sendDigest))
 
+	if a.Config.TestHooks {
+		m.HandleFunc("POST /api/v1/test/clock", a.user(store.RoleOwner, a.testClock))
+	}
+
 	const shared = "/api/v1/shared/{token}"
 	m.HandleFunc("GET "+shared, a.sharedLink)
 	m.HandleFunc("GET "+shared+"/events", a.sharedEvents)
@@ -363,6 +367,10 @@ func (a *API) createShare(w http.ResponseWriter, r *http.Request, p *principal, 
 		}
 		sh.SessionID, sh.StartMs = rec.ID, max(in.StartMs, 0)
 	case store.ShareDashboard:
+		if !projectSettings(proj).Analytics.Enabled {
+			a.fail(w, r, forbidden("Analytics is off for this project"))
+			return
+		}
 	default:
 		a.fail(w, r, invalid("Unknown kind of link", map[string]string{"kind": "Must be recording or dashboard"}))
 		return
@@ -446,7 +454,7 @@ func (a *API) sharedEvents(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) sharedAnalytics(w http.ResponseWriter, r *http.Request) {
 	sh, proj, err := a.share(r)
-	if err != nil || sh.Kind != store.ShareDashboard {
+	if err != nil || sh.Kind != store.ShareDashboard || !projectSettings(proj).Analytics.Enabled {
 		a.fail(w, r, errors.Join(err, errNotFound))
 		return
 	}
@@ -554,6 +562,10 @@ func (a *API) testWebhook(w http.ResponseWriter, r *http.Request, p *principal, 
 }
 
 func (a *API) sendDigest(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {
+	if !projectSettings(proj).Analytics.Enabled {
+		a.fail(w, r, invalid("The digest summarises visits, and analytics is off for this project", nil))
+		return
+	}
 	np := notifyProject(proj)
 	payload, err := a.Notify.Digest(r.Context(), np, time.Now())
 	if err != nil {
@@ -561,6 +573,20 @@ func (a *API) sendDigest(w http.ResponseWriter, r *http.Request, _ *principal, p
 		return
 	}
 	a.delivered(w, r, a.Notify.Send(r.Context(), np, payload))
+}
+
+// testClock moves the clock alerts go by. It exists only with
+// KIMMI_TEST_HOOKS, for kimmi's own tests.
+func (a *API) testClock(w http.ResponseWriter, r *http.Request, _ *principal) {
+	var in struct {
+		OffsetMs int64 `json:"offsetMs"`
+	}
+	if err := decode(r, &in); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.Notify.SetOffset(time.Duration(in.OffsetMs) * time.Millisecond)
+	writeJSON(w, http.StatusOK, map[string]any{"now": a.Notify.Now().UnixMilli()})
 }
 
 // recordingFilters reads the filters every number of the analytics pages

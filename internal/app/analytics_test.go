@@ -98,7 +98,30 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	owner.do("POST", "/api/v1/projects", obj{"name": "Shop", "origin": "https://shop.acme.dev", "platform": "script"}, 201, &proj)
 	p := "/api/v1/projects/" + proj.ID
 
-	// The SDK learns that analytics is on.
+	// Analytics is off until the project turns it on; then the SDK learns it.
+	if res, err := http.Get(srv.URL + "/i/v1/config?key=" + proj.PublicKey); err == nil {
+		var off struct{ Analytics struct{ Enabled bool } }
+		json.NewDecoder(res.Body).Decode(&off)
+		res.Body.Close()
+		if off.Analytics.Enabled {
+			t.Fatal("a new project must start with analytics off")
+		}
+	}
+	postHit(t, srv.URL, "/i/v1/hit", proj.PublicKey, obj{"v": 1, "visitId": "early", "anonymousId": "a"}, 403)
+	var listed []struct {
+		ID        string
+		Analytics bool
+	}
+	owner.do("GET", "/api/v1/projects", nil, 200, &listed)
+	if len(listed) != 1 || listed[0].Analytics {
+		t.Fatalf("projects: %+v", listed)
+	}
+	owner.do("PATCH", p+"/settings", obj{"analytics": obj{"enabled": true}}, 200, nil)
+	a.Cache.Invalidate(ctx)
+	owner.do("GET", "/api/v1/projects", nil, 200, &listed)
+	if !listed[0].Analytics {
+		t.Fatal("the project list must say analytics is on")
+	}
 	var conf struct {
 		Analytics struct{ Enabled, Cookieless, AutoEvents, Heatmaps bool }
 		Feedback  struct{ Button string }
