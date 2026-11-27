@@ -382,47 +382,39 @@ func (d *DB) applyStats(ctx context.Context, c conn, stats map[statKey]*statDelt
 		return cmp.Or(strings.Compare(a.project, b.project), cmp.Compare(a.day, b.day), strings.Compare(a.dim, b.dim), strings.Compare(a.k, b.k))
 	})
 
-	// The sketches that get new visitors are read, added to and written back.
+	// The sketches that get new visitors are read, added to and written
+	// back: one query per few hundred rows, whatever days they are on.
 	sketches := map[statKey][]byte{}
-	type group struct {
-		project string
-		day     int64
-		dim     string
-	}
-	wanted := map[group][]string{}
-	var groups []group
-	for _, k := range keys {
-		if len(stats[k].hashes) == 0 {
-			continue
-		}
-		g := group{k.project, k.day, k.dim}
-		if _, ok := wanted[g]; !ok {
-			groups = append(groups, g)
-		}
-		wanted[g] = append(wanted[g], k.k)
-	}
 	existing := map[statKey]*hll.Sketch{}
-	for _, g := range groups {
-		for part := range slices.Chunk(wanted[g], rowsPerStatement) {
-			rows, err := c.query(ctx, "SELECT k, sketch FROM stats_daily WHERE project_id = ? AND day = ? AND dim = ? AND k IN ("+placeholders(len(part))+")",
-				append([]any{g.project, g.day, g.dim}, inArgs(part)...)...)
-			if err != nil {
+	var wanted []statKey
+	for _, k := range keys {
+		if len(stats[k].hashes) > 0 {
+			wanted = append(wanted, k)
+		}
+	}
+	for part := range slices.Chunk(wanted, rowsPerStatement) {
+		args := make([]any, 0, len(part)*4)
+		for _, k := range part {
+			args = append(args, k.project, k.day, k.dim, k.k)
+		}
+		rows, err := c.query(ctx, "SELECT project_id, day, dim, k, sketch FROM stats_daily WHERE (project_id, day, dim, k) IN (VALUES "+
+			strings.TrimSuffix(strings.Repeat("(?, CAST(? AS INTEGER), ?, ?), ", len(part)), ", ")+")", args...)
+		if err != nil {
+			return fmt.Errorf("load sketches: %w", err)
+		}
+		for rows.Next() {
+			var k statKey
+			var raw []byte
+			if err := rows.Scan(&k.project, &k.day, &k.dim, &k.k, &raw); err != nil {
+				rows.Close()
 				return fmt.Errorf("load sketches: %w", err)
 			}
-			for rows.Next() {
-				var k string
-				var raw []byte
-				if err := rows.Scan(&k, &raw); err != nil {
-					rows.Close()
-					return fmt.Errorf("load sketches: %w", err)
-				}
-				if s, err := hll.Unmarshal(raw, sketchPrecision(g.dim)); err == nil {
-					existing[statKey{g.project, g.day, g.dim, k}] = s
-				}
+			if s, err := hll.Unmarshal(raw, sketchPrecision(k.dim)); err == nil {
+				existing[k] = s
 			}
-			if err := rows.Close(); err != nil {
-				return fmt.Errorf("load sketches: %w", err)
-			}
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("load sketches: %w", err)
 		}
 	}
 	for _, k := range keys {
