@@ -57,6 +57,7 @@ jobs:
           rm -rf internal/webui/dist && mkdir -p internal/webui/dist
           cp -R web/dist/. internal/webui/dist/
           cp sdk/browser/dist/kimmi.js internal/webui/dist/kimmi.js
+          cp sdk/browser/dist/kimmi-feedback.js internal/webui/dist/kimmi-feedback.js
       - name: Test
         run: go test -count=1 ./...
       - name: Build the binaries
