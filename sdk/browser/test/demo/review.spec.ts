@@ -1,9 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { expect, request, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, request, test, type APIRequestContext, type Page, type Request } from '@playwright/test';
 import { KIMMI } from './playwright.config';
 
 // Opens every page of the seeded demo in both themes, times each API call the page makes and keeps a
-// screenshot, so speed and layout under volume can be reviewed:  DEMO_REVIEW=1 playwright test --config ...
+// screenshot, so speed and layout under volume can be reviewed:  DEMO_PART=review playwright test --config test/demo/playwright.config.ts
 
 const SHOTS = process.env.KIMMI_SHOTS ?? 'test-results/demo';
 const KEYS = { rich: `km_pub_${'de30'.repeat(4)}`, replay: `km_pub_${'de31'.repeat(4)}` };
@@ -35,21 +35,19 @@ test.afterAll(async () => {
 });
 
 async function open(page: Page, name: string, url: string, settle = 500) {
-  const started = new Map<string, number>();
-  const onRequest = (req: { url(): string }) => started.set(req.url(), performance.now());
-  const onResponse = (res: { url(): string }) => {
-    const begin = started.get(res.url());
-    const path = new URL(res.url()).pathname;
-    if (begin !== undefined && path.startsWith('/api/')) {
-      timings.push({ page: name, route: path.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, ':id').replace(/\/errors\/[0-9a-f]{16}/, '/errors/:fp') + new URL(res.url()).search.slice(0, 60), ms: performance.now() - begin });
-    }
+  // Each request's own clock: from sending it to the end of its response.
+  const done = (req: Request) => {
+    const path = new URL(req.url()).pathname;
+    const ms = req.timing().responseEnd;
+    if (!path.startsWith('/api/') || ms < 0) return;
+    const route = path.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, ':id').replace(/\/errors\/[0-9a-f]{16}/, '/errors/:fp') + new URL(req.url()).search.slice(0, 60);
+    timings.push({ page: name, route, ms });
   };
-  page.on('request', onRequest);
-  page.on('requestfinished', async (req) => onResponse(req));
+  page.on('requestfinished', done);
   await page.goto(url);
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(settle);
-  page.off('request', onRequest);
+  page.off('requestfinished', done);
   await page.screenshot({ path: `${SHOTS}/${name}.png` });
 }
 

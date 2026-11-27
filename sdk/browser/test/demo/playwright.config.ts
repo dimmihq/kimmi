@@ -8,8 +8,9 @@ export const SHOPS = { rich: 'http://localhost:5225', replay: 'http://localhost:
 
 export default defineConfig({
   testDir: '.',
-  // `DEMO_REVIEW=1` runs the page review (timings and screenshots) instead of the visitors.
-  testMatch: process.env.DEMO_REVIEW ? 'review.spec.ts' : 'visitors.spec.ts',
+  // `DEMO_PART` picks what runs: the visitors (default), the closing `tour`, or the page `review`
+  // (timings and screenshots).
+  testMatch: `${process.env.DEMO_PART ?? 'visitors'}.spec.ts`,
   timeout: 120_000,
   fullyParallel: true,
   workers: Number(process.env.DEMO_WORKERS ?? 6),

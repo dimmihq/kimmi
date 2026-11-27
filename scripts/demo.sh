@@ -46,6 +46,7 @@ for _ in $(seq 1 60); do curl -sf localhost:5225 >/dev/null && curl -sf localhos
 
 echo "== real visitors in a browser"
 (cd sdk/browser && pnpm exec playwright test --config test/demo/playwright.config.ts) || echo "some visitors did not finish; the rest are in"
+(cd sdk/browser && DEMO_PART=tour pnpm exec playwright test --config test/demo/playwright.config.ts) || echo "the closing tour did not finish"
 
 node scripts/demo-setup.mjs after
 echo
