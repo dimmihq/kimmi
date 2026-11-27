@@ -258,4 +258,20 @@ describe('linear time on adversarial input', () => {
     stripCssUrls(input);
     expect(performance.now() - started).toBeLessThan(250);
   });
+
+  // A time limit alone passes a quadratic pattern on a fast machine. Doubling
+  // the input must not much more than double the time.
+  it.each(Object.keys(inputs))('scales linearly on %s', (name) => {
+    const once = inputs[name]!;
+    const time = (input: string) => {
+      const started = performance.now();
+      scrubText(input, on);
+      scrubUrl(input, on);
+      stripCssUrls(input);
+      return performance.now() - started;
+    };
+    const small = Math.max(time(once.repeat(2)), 1);
+    const large = time(once.repeat(8));
+    expect(large / small).toBeLessThan(12);
+  });
 });

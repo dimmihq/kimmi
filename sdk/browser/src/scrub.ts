@@ -94,13 +94,20 @@ function redactJwts(text: string): string {
   if (!text.includes('eyJ')) return text;
   return text.replace(DOTTED_RUN, (run) => {
     if (!run.includes('eyJ')) return run;
+    // Built in one pass: removing segments from the array in place costs a
+    // full shift per token, which is quadratic on a run made of tokens.
     const parts = run.split('.');
-    for (let i = 0; i < parts.length - 1; i++) {
+    const kept: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
       const at = parts[i]!.indexOf('eyJ');
-      if (at < 0 || !parts[i + 1]!.startsWith('eyJ')) continue;
-      parts.splice(i, 3, parts[i]!.slice(0, at) + REDACTED);
+      if (at < 0 || !parts[i + 1]?.startsWith('eyJ')) {
+        kept.push(parts[i]!);
+        continue;
+      }
+      kept.push(parts[i]!.slice(0, at) + REDACTED);
+      i += 2; // header, payload and signature are one token
     }
-    return parts.join('.');
+    return kept.join('.');
   });
 }
 
