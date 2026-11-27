@@ -23,6 +23,18 @@ type Project struct {
 	// Config is the ready-to-send /i/v1/config body.
 	Config   []byte
 	Settings settings.Settings
+	// zone is the project's time zone: its days are the days of the
+	// daily tables.
+	zone *time.Location
+}
+
+// DayOffsetMs is how far the project's time zone is ahead of UTC at t.
+func (p *Project) DayOffsetMs(t time.Time) int64 {
+	if p.zone == nil {
+		return 0
+	}
+	_, off := t.In(p.zone).Zone()
+	return int64(off) * 1000
 }
 
 // ProjectLister is the one store query the cache needs.
@@ -75,6 +87,9 @@ func (c *Cache) Load(ctx context.Context) error {
 		s := settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred)
 		proj := &Project{ID: p.ID, OrgID: p.OrgID, Name: p.Name, Timezone: p.Timezone, Origins: normalizeOrigins(p.Origins),
 			Config: configBody(true, s), Settings: s}
+		if zone, err := time.LoadLocation(p.Timezone); err == nil {
+			proj.zone = zone
+		}
 		next[p.PublicKey] = proj
 		byID[p.ID] = proj
 	}

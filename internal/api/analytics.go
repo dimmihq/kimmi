@@ -260,7 +260,7 @@ func (a *API) heatmap(w http.ResponseWriter, r *http.Request, _ *principal, proj
 	if device != "Desktop" && device != "Tablet" && device != "Mobile" {
 		device = ""
 	}
-	v, err := a.Store.Heatmap(r.Context(), store.HeatmapQuery{ProjectID: proj.ID, From: q.From, To: q.To, Path: path, Device: device})
+	v, err := a.Store.Heatmap(r.Context(), store.HeatmapQuery{ProjectID: proj.ID, From: q.From, To: q.To, DayOffsetMs: q.DayOffsetMs, Path: path, Device: device})
 	answer(a, w, r, v, err)
 }
 

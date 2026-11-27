@@ -194,17 +194,20 @@ func testTraffic(t *testing.T, s store.Store) {
 	eq(t, "languages", breakdown(t, tr.Languages, "en").Visits, 2)
 	eq(t, "pages", fmt.Sprint(tr.Pages), fmt.Sprint([]store.PageMetric{
 		{Path: "/", Views: 3, Visitors: 2, AvgTimeMs: 1333, Exits: 2, Scroll: 50},
-		{Path: "/pricing", Views: 2, Visitors: 1, AvgTimeMs: 4500, Exits: 0, Scroll: 70},
+		{Path: "/pricing", Views: 2, Visitors: 1, AvgTimeMs: 4500, Exits: 0, Scroll: 73},
 		{Path: "/thanks", Views: 1, Visitors: 1, Exits: 1},
 	}))
 
-	// A day offset moves the buckets: 10:00 UTC plus 14 hours is the next day.
-	q2 := q
-	q2.DayOffsetMs = 14 * hour
-	shifted := traffic(t, s, q2)
-	eq(t, "shifted days", len(shifted.Days), 3)
-	eq(t, "shifted first day", shifted.Days[0], store.TrafficDay{Date: "2026-06-01"})
-	eq(t, "shifted second day", shifted.Days[1].Visits, 2)
+	// A visit is counted on the day of its project's time zone, fixed when
+	// it arrives: 10:00 UTC in a zone 14 hours ahead is already tomorrow.
+	ahead := seedProject(t, s, org.ID, "ahead")
+	late := hit(ahead, "z1", "Z", base+10*hour, pageEv(0, "/"))
+	late.DayOffsetMs = 14 * hour
+	apply(t, s, late)
+	shifted := traffic(t, s, store.AnalyticsQuery{ProjectID: ahead.ID, From: base - 14*hour, To: base + 2*day - 14*hour, PrevFrom: base - 2*day, DayOffsetMs: 14 * hour})
+	eq(t, "shifted days", len(shifted.Days), 2)
+	eq(t, "shifted first day", shifted.Days[0].Visits, 0)
+	eq(t, "shifted second day", shifted.Days[1].Visits, 1)
 
 	filters := []struct {
 		f      store.VisitFilter
@@ -425,10 +428,10 @@ func testHeatmap(t *testing.T, s store.Store) {
 	eq(t, "cells", fmt.Sprint(h.Cells), fmt.Sprint([]store.HeatCell{{X: 50, Y: 10, N: 2}, {X: 1, Y: 5, N: 1}, {X: 99, Y: 0, N: 1}}))
 	eq(t, "elements", fmt.Sprint(h.Elements), fmt.Sprint([]store.HeatElement{
 		{Selector: "#cta", Label: "Start now", Count: 2}, {Selector: "#edge", Label: "Edge", Count: 1}, {Selector: "#menu", Label: "Menu", Count: 1}}))
-	eq(t, "views", h.Views, 2)
-	eq(t, "scroll", h.Scroll, [10]int{2, 2, 1, 1, 1, 1, 1, 1, 1, 0})
-	eq(t, "height", h.Height, 3200)
-	eq(t, "width", h.Width, 1440)
+	eq(t, "views", h.Views, 3)
+	eq(t, "scroll", h.Scroll, [10]int{3, 3, 2, 2, 2, 2, 1, 1, 1, 0})
+	eq(t, "height", h.Height, 3733) // the average page
+	eq(t, "width", h.Width, 1090)   // the average over phones and desktops
 	if h.Snapshot == nil {
 		t.Fatal("no snapshot")
 	}
@@ -448,7 +451,7 @@ func testHeatmap(t *testing.T, s store.Store) {
 	q.Device = "Desktop"
 	h, _ = s.Heatmap(ctx, q)
 	eq(t, "desktop clicks", h.Clicks, 3)
-	eq(t, "desktop views", h.Views, 1)
+	eq(t, "desktop views", h.Views, 2) // two stays on the page by one visit
 	if h.Snapshot == nil {
 		t.Fatal("no desktop snapshot")
 	}

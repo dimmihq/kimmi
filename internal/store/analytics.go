@@ -92,10 +92,13 @@ type Hit struct {
 	// replaces it with the visitor's visit of the last 30 minutes, if any.
 	VisitID string
 	// VisitorKey is "a:" and the anonymous id, or "h:" and the day's hash.
-	VisitorKey  string
-	Cookieless  bool
-	StartedAt   int64
-	At          int64
+	VisitorKey string
+	Cookieless bool
+	StartedAt  int64
+	At         int64
+	// DayOffsetMs is how far the project's time zone is ahead of UTC: the
+	// daily tables are kept in the project's own days.
+	DayOffsetMs int64
 	Referrer    string // host of an external referrer, "" for none
 	Channel     string
 	UTMSource   string
@@ -313,10 +316,11 @@ type FunnelStep struct {
 
 // HeatmapQuery picks one page and one device class.
 type HeatmapQuery struct {
-	ProjectID string
-	From, To  int64
-	Path      string
-	Device    string // Desktop, Tablet or Mobile, by viewport width
+	ProjectID   string
+	From, To    int64
+	DayOffsetMs int64
+	Path        string
+	Device      string // Desktop, Tablet or Mobile, by viewport width
 }
 
 // Heatmap is where people clicked on a page and how far they scrolled.

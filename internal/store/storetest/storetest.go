@@ -35,6 +35,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 	t.Run("day salt", func(t *testing.T) { testDaySalt(t, open(t)) })
 	t.Run("notes, shares, feedback and state", func(t *testing.T) { testAttachments(t, open(t)) })
 	t.Run("analytics deletes", func(t *testing.T) { testAnalyticsDeletes(t, open(t)) })
+	t.Run("daily tables agree with the rows", func(t *testing.T) { testDailyAgrees(t, open(t)) })
 }
 
 func must(t *testing.T, err error) {

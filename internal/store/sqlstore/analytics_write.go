@@ -16,10 +16,34 @@ import (
 // in the same visit.
 const visitGapMs = 30 * 60 * 1000
 
+// visitRow is a visit as the database has it before this flush.
+type visitRow struct {
+	project    string
+	visitorKey string
+	startedAt  int64
+	lastAt     int64
+	pageviews  int
+	actions    int
+	engaged    int64
+	entry      string
+	exit       string
+	referrer   string
+	channel    string
+	campaign   string
+	country    string
+	device     string
+	browser    string
+	os         string
+	language   string
+	counted    string
+	day        int64
+}
+
 // visitDelta is what one flush adds to one visit.
 type visitDelta struct {
 	id        string
 	first     store.Hit
+	prev      *visitRow // nil for a new visit
 	startedAt int64
 	lastAt    int64
 	pageviews int
@@ -29,6 +53,8 @@ type visitDelta struct {
 	exit      string
 	events    [][]store.Event // each hit's events, not copied
 	returning bool
+	counted   string // what the daily tables have already counted this visit for
+	day       int64  // the project's day the visit started on
 }
 
 func (d *DB) ApplyHits(ctx context.Context, hits []store.Hit) error {
@@ -40,10 +66,16 @@ func (d *DB) ApplyHits(ctx context.Context, hits []store.Hit) error {
 		if err != nil {
 			return err
 		}
+		// The daily tables are worked out first: they decide what each
+		// visit has now been counted for, which is stored with the visit.
+		daily := rollUp(deltas)
 		if err := d.upsertVisits(ctx, c, deltas); err != nil {
 			return err
 		}
-		return insertEvents(ctx, c, deltas)
+		if err := insertEvents(ctx, c, deltas); err != nil {
+			return err
+		}
+		return d.applyDaily(ctx, c, daily)
 	})
 	if err != nil {
 		return fmt.Errorf("apply hits: %w", err)
@@ -116,19 +148,22 @@ func aggregateVisits(ctx context.Context, c conn, hits []store.Hit) ([]*visitDel
 	for i, v := range out {
 		ids[i] = v.id
 	}
-	owner := map[string]string{}
 	for part := range slices.Chunk(ids, rowsPerStatement) {
-		rows, err := c.query(ctx, "SELECT id, project_id FROM visits WHERE id IN ("+placeholders(len(part))+")", inArgs(part)...)
+		rows, err := c.query(ctx, `SELECT id, project_id, visitor_key, started_at, last_at, pageviews, actions, engaged_ms, entry_path, exit_path,
+				referrer, channel, utm_campaign, country_code, device, browser, os, language, counted, day
+			FROM visits WHERE id IN (`+placeholders(len(part))+")", inArgs(part)...)
 		if err != nil {
 			return nil, fmt.Errorf("load visits: %w", err)
 		}
 		for rows.Next() {
-			var id, project string
-			if err := rows.Scan(&id, &project); err != nil {
+			var id string
+			var r visitRow
+			if err := rows.Scan(&id, &r.project, &r.visitorKey, &r.startedAt, &r.lastAt, &r.pageviews, &r.actions, &r.engaged, &r.entry, &r.exit,
+				&r.referrer, &r.channel, &r.campaign, &r.country, &r.device, &r.browser, &r.os, &r.language, &r.counted, &r.day); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("load visits: %w", err)
 			}
-			owner[id] = project
+			byID[id].prev = &r
 		}
 		if err := rows.Close(); err != nil {
 			return nil, fmt.Errorf("load visits: %w", err)
@@ -137,14 +172,12 @@ func aggregateVisits(ctx context.Context, c conn, hits []store.Hit) ([]*visitDel
 	// A visit id is chosen by the browser: one that already belongs to
 	// another project is dropped with its events.
 	out = slices.DeleteFunc(out, func(v *visitDelta) bool {
-		project, exists := owner[v.id]
-		return exists && project != v.first.ProjectID
+		return v.prev != nil && v.prev.project != v.first.ProjectID
 	})
 	earlier := map[string]bool{}
 	for _, v := range out {
 		key := v.first.ProjectID + " " + v.first.VisitorKey
-		_, exists := owner[v.id]
-		if exists || v.first.Cookieless {
+		if v.prev != nil || v.first.Cookieless {
 			earlier[key] = true
 			continue
 		}
@@ -167,18 +200,18 @@ func aggregateVisits(ctx context.Context, c conn, hits []store.Hit) ([]*visitDel
 
 func (d *DB) upsertVisits(ctx context.Context, c conn, deltas []*visitDelta) error {
 	g := d.greatest()
-	const cols = 25
+	const cols = 27
 	for part := range slices.Chunk(deltas, rowsPerStatement) {
 		args := make([]any, 0, len(part)*cols)
 		for _, v := range part {
 			h := v.first
 			args = append(args, v.id, h.OrgID, h.ProjectID, h.VisitorKey, v.startedAt, v.lastAt, v.pageviews, v.actions, v.engaged,
 				v.entry, v.exit, h.Referrer, h.Channel, h.UTMSource, h.UTMMedium, h.UTMCampaign,
-				h.CountryCode, h.Device, h.Browser, h.OS, h.Language, h.ViewportW, h.Release, v.returning, h.Cookieless)
+				h.CountryCode, h.Device, h.Browser, h.OS, h.Language, h.ViewportW, h.Release, v.returning, h.Cookieless, v.counted, v.day)
 		}
 		_, err := c.exec(ctx, `INSERT INTO visits (id, org_id, project_id, visitor_key, started_at, last_at, pageviews, actions, engaged_ms,
 				entry_path, exit_path, referrer, channel, utm_source, utm_medium, utm_campaign,
-				country_code, device, browser, os, language, viewport_w, release, is_returning, cookieless)
+				country_code, device, browser, os, language, viewport_w, release, is_returning, cookieless, counted, day)
 			VALUES `+valueRows(len(part), cols)+`
 			ON CONFLICT (id) DO UPDATE SET
 				last_at = `+g+`(visits.last_at, excluded.last_at),
@@ -187,7 +220,8 @@ func (d *DB) upsertVisits(ctx context.Context, c conn, deltas []*visitDelta) err
 				engaged_ms = visits.engaged_ms + excluded.engaged_ms,
 				entry_path = CASE WHEN visits.entry_path = '' THEN excluded.entry_path ELSE visits.entry_path END,
 				exit_path = CASE WHEN excluded.exit_path <> '' THEN excluded.exit_path ELSE visits.exit_path END,
-				release = CASE WHEN excluded.release <> '' THEN excluded.release ELSE visits.release END
+				release = CASE WHEN excluded.release <> '' THEN excluded.release ELSE visits.release END,
+				counted = excluded.counted
 			WHERE visits.project_id = excluded.project_id`, args...)
 		if err != nil {
 			return fmt.Errorf("upsert visits: %w", err)
@@ -285,6 +319,14 @@ func (d *DB) DeleteAnalyticsBefore(ctx context.Context, projectID string, before
 		if _, err := c.exec(ctx, "DELETE FROM feedback WHERE project_id = ? AND created_at < ?", projectID, before); err != nil {
 			return err
 		}
+		// The daily tables go by whole days: a day is dropped once all of
+		// it is older than the limit, whatever the project's time zone.
+		day := before/store.DayMs - 1
+		for _, table := range []string{"stats_daily", "events_daily", "heat_daily"} {
+			if _, err := c.exec(ctx, "DELETE FROM "+table+" WHERE project_id = ? AND day < ?", projectID, day); err != nil {
+				return err
+			}
+		}
 		res, err := c.exec(ctx, "DELETE FROM visits WHERE project_id = ? AND last_at < ?", projectID, before)
 		if err != nil {
 			return err
@@ -301,8 +343,27 @@ func (d *DB) DeleteAnalyticsBefore(ctx context.Context, projectID string, before
 // deleteVisitorAnalytics removes what the event index, feedback, notes and
 // share links hold about one visitor. It runs inside DeleteVisitor's
 // transaction, before the visitor's recordings are marked deleted.
-func deleteVisitorAnalytics(ctx context.Context, c conn, projectID, visitorID, anonymousID string) error {
+func (d *DB) deleteVisitorAnalytics(ctx context.Context, c conn, projectID, visitorID, anonymousID string) error {
 	key := "a:" + anonymousID
+	// The daily tables hold sums that cannot give one visitor back: the
+	// days this visitor was seen on are counted again without them.
+	rows, err := c.query(ctx, `SELECT DISTINCT day FROM visits WHERE project_id = ? AND (visitor_key = ?
+		OR id IN (SELECT id FROM sessions WHERE visitor_id = ? AND project_id = ?))`, projectID, key, visitorID, projectID)
+	if err != nil {
+		return err
+	}
+	var days []int64
+	for rows.Next() {
+		var day int64
+		if err := rows.Scan(&day); err != nil {
+			rows.Close()
+			return err
+		}
+		days = append(days, day)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
 	visits := "SELECT id FROM visits WHERE project_id = ? AND visitor_key = ?"
 	sessions := "SELECT id FROM sessions WHERE visitor_id = ? AND project_id = ?"
 	for _, q := range []struct {
@@ -321,13 +382,13 @@ func deleteVisitorAnalytics(ctx context.Context, c conn, projectID, visitorID, a
 			return err
 		}
 	}
-	return nil
+	return d.rebuildDaily(ctx, c, projectID, days)
 }
 
 // deleteProjectAnalytics removes everything a project holds beside its
 // recordings. It runs inside DeleteProject's transaction.
 func deleteProjectAnalytics(ctx context.Context, c conn, projectID string) error {
-	for _, table := range []string{"events", "visits", "feedback", "notes", "shares", "project_state"} {
+	for _, table := range []string{"events", "visits", "feedback", "notes", "shares", "project_state", "stats_daily", "events_daily", "heat_daily"} {
 		if _, err := c.exec(ctx, "DELETE FROM "+table+" WHERE project_id = ?", projectID); err != nil {
 			return err
 		}

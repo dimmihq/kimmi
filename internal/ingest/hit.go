@@ -199,7 +199,7 @@ func (h *Handler) hit(w http.ResponseWriter, r *http.Request) {
 	agent := useragent.Parse(r.UserAgent())
 	src := classify(in.URL, in.Landing, in.Referrer)
 	out := store.Hit{OrgID: p.OrgID, ProjectID: p.ID, VisitID: in.VisitID, VisitorKey: key, Cookieless: cookieless,
-		StartedAt: in.StartedAt, At: now.UnixMilli(),
+		StartedAt: in.StartedAt, At: now.UnixMilli(), DayOffsetMs: p.DayOffsetMs(now),
 		Referrer: src.referrer, Channel: src.channel, UTMSource: src.utmSource, UTMMedium: src.utmMedium, UTMCampaign: src.utmCampaign,
 		CountryCode: geo.FromTimezone(in.Timezone).CountryCode, Device: agent.Device, Browser: agent.Browser, OS: agent.OS,
 		Language: cut(in.Language, 20), ViewportW: in.Viewport.W, Release: cut(in.Release, 100),

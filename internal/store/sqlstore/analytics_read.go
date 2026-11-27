@@ -113,7 +113,7 @@ func (d *DB) together(parts ...func() error) error {
 	return first
 }
 
-func (d *DB) Traffic(ctx context.Context, q store.AnalyticsQuery) (store.Traffic, error) {
+func (d *DB) trafficRaw(ctx context.Context, q store.AnalyticsQuery) (store.Traffic, error) {
 	t := store.Traffic{Days: []store.TrafficDay{}, Pages: []store.PageMetric{}}
 	first, last := (q.From+q.DayOffsetMs)/store.DayMs, (q.To-1+q.DayOffsetMs)/store.DayMs
 	index := map[int64]int{}
@@ -174,6 +174,9 @@ func (d *DB) Traffic(ctx context.Context, q store.AnalyticsQuery) (store.Traffic
 		parts = append(parts, func() error {
 			f := visitScope(q.ProjectID, q.From, q.To, q.Filter)
 			col := "v." + b.col
+			if b.col == "entry_path" || b.col == "exit_path" {
+				f.add(col + " <> ''") // a visit without a page view entered and left nowhere
+			}
 			err := d.each(ctx, "SELECT "+col+", COUNT(DISTINCT v.visitor_key), COUNT(*) FROM visits v"+f.sql()+
 				" GROUP BY "+col+" ORDER BY COUNT(DISTINCT v.visitor_key) DESC, COUNT(*) DESC, "+col+" LIMIT 10", f.args, func(rows *sql.Rows) error {
 				var row store.Breakdown
@@ -294,7 +297,7 @@ func stepMatches(s store.Step, kind, path, name string) bool {
 	return false
 }
 
-func (d *DB) Goals(ctx context.Context, q store.AnalyticsQuery, goals []store.Step) ([]int, error) {
+func (d *DB) goalsRaw(ctx context.Context, q store.AnalyticsQuery, goals []store.Step) ([]int, error) {
 	out := make([]int, len(goals))
 	parts := make([]func() error, len(goals))
 	for i, g := range goals {
@@ -326,7 +329,7 @@ func (d *DB) GoalSources(ctx context.Context, q store.AnalyticsQuery, goal store
 	return out, nil
 }
 
-func (d *DB) EventNames(ctx context.Context, q store.AnalyticsQuery) ([]store.EventStat, error) {
+func (d *DB) eventNamesRaw(ctx context.Context, q store.AnalyticsQuery) ([]store.EventStat, error) {
 	out := []store.EventStat{}
 	from, f := eventScope(q, false)
 	f.add("e.kind = ?", store.KindTrack)
@@ -378,7 +381,7 @@ func propsSource(props string) string {
 	return p.Source
 }
 
-func (d *DB) ErrorGroups(ctx context.Context, q store.AnalyticsQuery) ([]store.ErrorGroup, error) {
+func (d *DB) errorGroupsRaw(ctx context.Context, q store.AnalyticsQuery) ([]store.ErrorGroup, error) {
 	out, err := d.errorGroups(ctx, q, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error groups: %w", err)
@@ -459,7 +462,7 @@ func (d *DB) errorGroups(ctx context.Context, q store.AnalyticsQuery, only *stri
 }
 
 func (d *DB) ErrorGroup(ctx context.Context, q store.AnalyticsQuery, fingerprint string) (store.ErrorGroup, []store.Occurrence, error) {
-	groups, err := d.errorGroups(ctx, q, &fingerprint)
+	groups, err := d.dailyErrorGroups(ctx, q, &fingerprint)
 	if err != nil {
 		return store.ErrorGroup{}, nil, fmt.Errorf("error group: %w", err)
 	}
@@ -486,7 +489,7 @@ func (d *DB) ErrorGroup(ctx context.Context, q store.AnalyticsQuery, fingerprint
 	return groups[0], occurrences, nil
 }
 
-func (d *DB) Friction(ctx context.Context, q store.AnalyticsQuery) (store.Friction, error) {
+func (d *DB) frictionRaw(ctx context.Context, q store.AnalyticsQuery) (store.Friction, error) {
 	out := store.Friction{Pages: []store.PageFriction{}, Elements: []store.ElementFriction{}}
 
 	var pages []store.PageFriction
@@ -579,7 +582,7 @@ func (d *DB) Friction(ctx context.Context, q store.AnalyticsQuery) (store.Fricti
 	return out, nil
 }
 
-func (d *DB) Requests(ctx context.Context, q store.AnalyticsQuery) ([]store.RequestStat, error) {
+func (d *DB) requestsRaw(ctx context.Context, q store.AnalyticsQuery) ([]store.RequestStat, error) {
 	const failed = "(e.num = 0 OR e.num >= 400)"
 	scope := func() (string, *filter) {
 		from, f := eventScope(q, false)
@@ -670,7 +673,7 @@ func (s vitalStats) page(path string) store.PageVitals {
 
 // Vitals returns the whole site first (Path ""), then up to 20 pages with
 // the most samples. Nothing comes back when nothing was measured.
-func (d *DB) Vitals(ctx context.Context, q store.AnalyticsQuery) ([]store.PageVitals, error) {
+func (d *DB) vitalsRaw(ctx context.Context, q store.AnalyticsQuery) ([]store.PageVitals, error) {
 	from, f := eventScope(q, false)
 	f.add("e.kind = ?", store.KindVital)
 	f.in("e.name", vitalNames)
@@ -785,7 +788,7 @@ func (d *DB) Funnel(ctx context.Context, q store.AnalyticsQuery, steps []store.S
 	return out, nil
 }
 
-func (d *DB) HeatmapPages(ctx context.Context, q store.AnalyticsQuery) ([]store.PathCount, error) {
+func (d *DB) heatmapPagesRaw(ctx context.Context, q store.AnalyticsQuery) ([]store.PathCount, error) {
 	out := []store.PathCount{}
 	from, f := eventScope(q, false)
 	f.add("e.kind = ?", store.KindClick)
@@ -837,7 +840,7 @@ func median(values []int) int {
 	return values[len(values)/2]
 }
 
-func (d *DB) Heatmap(ctx context.Context, q store.HeatmapQuery) (store.Heatmap, error) {
+func (d *DB) heatmapRaw(ctx context.Context, q store.HeatmapQuery) (store.Heatmap, error) {
 	h := store.Heatmap{Cells: []store.HeatCell{}, Elements: []store.HeatElement{}}
 	const from = " FROM events e"
 
@@ -916,7 +919,16 @@ func (d *DB) Heatmap(ctx context.Context, q store.HeatmapQuery) (store.Heatmap, 
 		return h, fmt.Errorf("heatmap width: %w", err)
 	}
 
-	f = &filter{}
+	if h.Snapshot, err = d.heatSnapshot(ctx, q); err != nil {
+		return h, err
+	}
+	return h, nil
+}
+
+// heatSnapshot finds the latest recording that shows the page at the
+// device's width, to draw under a heatmap.
+func (d *DB) heatSnapshot(ctx context.Context, q store.HeatmapQuery) (*store.HeatmapSource, error) {
+	f := &filter{}
 	f.add("e.project_id = ?", q.ProjectID)
 	f.add("e.kind = ?", store.KindPage)
 	f.add("e.ts >= ? AND e.ts < ?", q.From, q.To)
@@ -925,16 +937,16 @@ func (d *DB) Heatmap(ctx context.Context, q store.HeatmapQuery) (store.Heatmap, 
 		f.add(c)
 	}
 	var snap store.HeatmapSource
-	err = d.r.row(ctx, `SELECT s.id, e.ts, s.started_at FROM events e
+	err := d.r.row(ctx, `SELECT s.id, e.ts, s.started_at FROM events e
 		JOIN sessions s ON s.id = e.visit_id AND s.project_id = e.project_id AND s.deleted_at IS NULL`+f.sql()+`
 		ORDER BY e.ts DESC, e.id DESC LIMIT 1`, f.args...).Scan(&snap.RecordingID, &snap.Ts, &snap.StartedAt)
 	switch {
 	case err == nil:
-		h.Snapshot = &snap
+		return &snap, nil
 	case err != sql.ErrNoRows:
-		return h, fmt.Errorf("heatmap snapshot: %w", err)
+		return nil, fmt.Errorf("heatmap snapshot: %w", err)
 	}
-	return h, nil
+	return nil, nil
 }
 
 // Retention counts only visitors with an anonymous id: a cookieless hash
