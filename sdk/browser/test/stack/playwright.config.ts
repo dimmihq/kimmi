@@ -20,8 +20,12 @@ export default defineConfig({
   workers: 1,
   reporter: 'list',
   globalSetup: './setup.ts',
-  use: { ...devices['Desktop Chrome'], trace: 'retain-on-failure' },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  use: { trace: 'retain-on-failure' },
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  ],
   webServer: [
     {
       command: `pnpm run build && pnpm exec vite preview --port ${SHOP_PORT} --strictPort`,
