@@ -7,7 +7,7 @@ import { useProjects } from '@/api/queries';
 import { duration } from '@/lib/format';
 import { cn, Kbd } from '@/ui';
 import { ProjectTile } from './AppFrame';
-import { ALL_WORKSPACE_SETTINGS, OVERVIEW, PROJECT_PAGES, PROJECT_SETTINGS } from './nav';
+import { ALL_WORKSPACE_SETTINGS, OVERVIEW, PROJECT_PAGES, PROJECT_SETTINGS, visiblePages } from './nav';
 import { setTheme, useTheme } from './theme';
 
 const RECENT = { ...DEFAULT_RECORDING_FILTERS, limit: 4 };
@@ -44,7 +44,7 @@ export function CommandBar({
     const base = current ? `/projects/${current.id}` : '';
     const scoped = (list: Command[]) => (current ? list : []);
     return [
-      ...scoped([OVERVIEW, ...PROJECT_PAGES].map((page) => ({
+      ...scoped([OVERVIEW, ...visiblePages(PROJECT_PAGES, current?.analytics)].map((page) => ({
         id: `page:${page.key}`,
         group: current?.name ?? '',
         label: page.label,
@@ -82,7 +82,7 @@ export function CommandBar({
         run: go('/projects/new'),
       },
       ...scoped(
-        PROJECT_SETTINGS.map((page) => ({
+        visiblePages(PROJECT_SETTINGS, current?.analytics).map((page) => ({
           id: `ps:${page.key}`,
           group: `${current?.name ?? ''} settings`,
           label: page.label,

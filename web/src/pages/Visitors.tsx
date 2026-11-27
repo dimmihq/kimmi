@@ -25,6 +25,7 @@ const PER_PAGE = 25;
 
 type Tab = 'people' | 'returning' | 'accounts';
 const TABS: Tab[] = ['people', 'returning', 'accounts'];
+const TAB_LABEL: Record<Tab, string> = { people: 'People', returning: 'Returning', accounts: 'Accounts' };
 
 const WEEKS = 8;
 
@@ -237,7 +238,9 @@ function Accounts({ current }: { current: Project }) {
 export function Visitors() {
   const current = useProjectScope();
   const [params, setParams] = useSearchParams();
-  const tab = TABS.find((entry) => entry === params.get('tab')) ?? 'people';
+  // Returning visitors are counted from visits, so the tab needs analytics.
+  const tabs = TABS.filter((entry) => entry !== 'returning' || current.analytics);
+  const tab = tabs.find((entry) => entry === params.get('tab')) ?? 'people';
   // The header counts everyone, whatever the list below is narrowed to.
   const everyone = useVisitors(current.id, {
     q: '',
@@ -276,11 +279,7 @@ export function Visitors() {
               { replace: true },
             )
           }
-          options={[
-            { value: 'people', label: 'People' },
-            { value: 'returning', label: 'Returning' },
-            { value: 'accounts', label: 'Accounts' },
-          ]}
+          options={tabs.map((value) => ({ value, label: TAB_LABEL[value] }))}
         />
       </div>
 

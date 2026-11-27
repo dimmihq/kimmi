@@ -376,12 +376,21 @@ export function useUpdateProjectSettings(projectId: string) {
     queryKey: settingsKeys.projectSettings(projectId),
     mutationFn: (patch) => api.patch<ProjectSettings>(`/projects/${projectId}/settings`, patch),
     apply: mergeSettings,
-    // Retention also shows on the project and in the storage report.
+    // Retention also shows on the project and in the storage report; whether
+    // visits are counted decides which pages the project has.
     onSuccess: (_settings, patch) => {
-      if (!patch.retention) return;
+      const counting = patch.analytics?.enabled;
+      if (counting !== undefined) {
+        // The sidebar follows at once, before the refetch answers.
+        const set = (project: Project) =>
+          project.id === projectId ? { ...project, analytics: counting } : project;
+        client.setQueryData<Project>(keys.project(projectId), (project) => project && set(project));
+        client.setQueryData<Project[]>(keys.projects, (projects) => projects?.map(set));
+      }
+      if (!patch.retention && counting === undefined) return;
       void client.invalidateQueries({ queryKey: keys.project(projectId), exact: true });
       void client.invalidateQueries({ queryKey: keys.projects, exact: true });
-      void client.invalidateQueries({ queryKey: settingsKeys.storage });
+      if (patch.retention) void client.invalidateQueries({ queryKey: settingsKeys.storage });
     },
   });
 }

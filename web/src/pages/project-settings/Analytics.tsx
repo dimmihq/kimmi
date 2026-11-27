@@ -1,7 +1,7 @@
 import { Filter, MoreHorizontal, Pencil, Plus, Target, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { useMe, useProject } from '@/api/queries';
+import { useAnalyticsOn, useMe, useProject } from '@/api/queries';
 import { canManage, useProjectSettings, useUpdateProjectSettings } from '@/api/settings';
 import type {
   AnalyticsSettings as Analytics,
@@ -104,6 +104,9 @@ export function AnalyticsSettings() {
   const settings = useProjectSettings(projectId);
   const update = useUpdateProjectSettings(projectId);
   const analytics = settings.data?.analytics;
+  const counted = useAnalyticsOn(projectId);
+  // The switch itself answers first; before the settings load, the project does.
+  const on = analytics ? analytics.enabled : counted === true;
   const feedback = settings.data?.feedback;
   const goals = analytics?.goals ?? [];
   const funnels = analytics?.funnels ?? [];
@@ -225,7 +228,11 @@ export function AnalyticsSettings() {
     <Page>
       <SettingsHeader
         title="Analytics"
-        description={`How visits to ${project.data?.name ?? 'this project'} are counted, and the goals and funnels measured from them.`}
+        description={
+          on
+            ? `How visits to ${project.data?.name ?? 'this project'} are counted, and the goals and funnels measured from them.`
+            : `Whether visits to ${project.data?.name ?? 'this project'} are counted.`
+        }
       />
 
       {settings.isError ? (
@@ -239,11 +246,15 @@ export function AnalyticsSettings() {
         <>
           <SettingSection
             title="Counting"
-            description="Since version 0.2, kimmi counts page views, where visits come from, clicks, errors and page speed for every visitor, recorded or not. No page content is kept. These switches say what is counted."
+            description={
+              on
+                ? 'What is counted for every visitor, recorded or not.'
+                : 'Off by default. A project that only records sessions needs none of this.'
+            }
           >
             <SettingRow
               title="Count visits"
-              description="Page views and visits are counted for every visitor, separately from recording."
+              description="Counts page views, where visits come from, clicks, errors and page speed for every visitor, recorded or not, and adds Analytics, Funnels, Heatmaps, Errors, Friction, Performance and Feedback to this project. No page content is kept."
             >
               <Loaded value={analytics} kind="switch">
                 {(current) => (
@@ -256,250 +267,258 @@ export function AnalyticsSettings() {
                 )}
               </Loaded>
             </SettingRow>
-            <SettingRow
-              title="Cookieless counting"
-              description={
-                <>
-                  Count visits without storing anything in the visitor's browser. A daily hash of
-                  the address and browser tells visitors apart and is thrown away each night, so a
-                  returning visitor counts again the next day. Recording still needs storage: with
-                  this on, recordings start only after you call {code('kimmi.optIn()')}.
-                </>
-              }
-            >
-              <Loaded value={analytics} kind="switch">
-                {(current) => (
-                  <Switch
-                    label="Cookieless counting"
-                    disabled={!manage}
-                    checked={current.cookieless}
-                    onChange={(cookieless) => save({ cookieless })}
-                  />
-                )}
-              </Loaded>
-            </SettingRow>
-            {COUNTING.map((entry) => (
-              <SettingRow key={entry.id} title={entry.title} description={entry.hint}>
-                <Loaded value={analytics} kind="switch">
-                  {(current) => (
-                    <Switch
-                      label={entry.title}
-                      disabled={!manage}
-                      checked={current[entry.id]}
-                      onChange={(next) => save({ [entry.id]: next })}
-                    />
-                  )}
-                </Loaded>
-              </SettingRow>
-            ))}
-            <SettingRow
-              title="Keep analytics for"
-              description="Visit counts and events older than this are deleted."
-            >
-              <Loaded value={analytics}>
-                {(current) => {
-                  const value = String(current.retentionDays);
-                  const choices = withValue(PERIODS, value, `${value} days`);
-                  return manage ? (
-                    <Select
-                      block
-                      label="Keep analytics for"
-                      value={value}
-                      onChange={(next) =>
-                        save({ retentionDays: Number(next) as Analytics['retentionDays'] })
-                      }
-                      options={choices}
-                    />
-                  ) : (
-                    <p className="text-control text-fg-meta">
-                      {choices.find((choice) => choice.value === value)?.label}
-                    </p>
-                  );
-                }}
-              </Loaded>
-            </SettingRow>
-          </SettingSection>
-
-          <SettingSection title="Feedback" description="Let visitors tell you what went wrong.">
-            <SettingRow
-              title="Feedback button"
-              description={
-                <>
-                  Where a small Feedback button sits on your site. Hidden shows none: call{' '}
-                  {code("kimmi.feedback('...')")} from a button of your own. Messages arrive with
-                  the session they were sent from.
-                </>
-              }
-            >
-              <Loaded value={feedback} kind="field">
-                {(current) => {
-                  const places = [
-                    { value: 'hidden', label: 'Hidden' },
-                    { value: 'bottom-right', label: 'Bottom right' },
-                    { value: 'bottom-left', label: 'Bottom left' },
-                  ];
-                  return manage ? (
-                    <Select
-                      block
-                      label="Feedback button"
-                      value={current.button}
-                      onChange={(button) =>
-                        update.mutate(
-                          { feedback: { button: button as typeof current.button } },
-                          { onSuccess: () => toast('Saved'), onError: failed },
-                        )
-                      }
-                      options={places}
-                    />
-                  ) : (
-                    <p className="text-control text-fg-meta">
-                      {places.find((place) => place.value === current.button)?.label}
-                    </p>
-                  );
-                }}
-              </Loaded>
-            </SettingRow>
-          </SettingSection>
-
-          <SettingSection
-            title="Goals"
-            description="A visit converts when it views a page or sends an event."
-            actions={
-              manage
-                ? addButton(
-                    'Add goal',
-                    goals.length >= MAX_GOALS,
-                    `A project has at most ${MAX_GOALS} goals`,
-                    () => openGoal(NEW_GOAL),
-                  )
-                : null
-            }
-          >
-            {!analytics ? (
-              <SkeletonItems count={2} />
-            ) : goals.length === 0 ? (
-              <SettingsEmpty
-                icon={Target}
-                title="No goals"
-                description="Add a goal to count the visits that reach a page or send an event."
-              />
-            ) : (
-              goals.map((entry, index) => (
-                <SettingsListItem
-                  key={`${index}:${entry.id}`}
-                  title={<span className="truncate">{entry.name}</span>}
+            {on ? (
+              <>
+                <SettingRow
+                  title="Cookieless counting"
                   description={
                     <>
-                      {KIND_LABEL[entry.kind]}{' '}
-                      <span className="font-mono text-mono">{entry.value}</span>
+                      Count visits without storing anything in the visitor's browser. A daily hash of
+                      the address and browser tells visitors apart and is thrown away each night, so a
+                      returning visitor counts again the next day. Recording still needs storage: with
+                      this on, recordings start only after you call {code('kimmi.optIn()')}.
                     </>
                   }
-                  actions={
-                    manage ? (
-                      <Menu
-                        align="end"
-                        trigger={<IconButton icon={MoreHorizontal} label="Goal actions" />}
-                        actions={[
-                          {
-                            id: 'edit',
-                            label: 'Edit',
-                            icon: Pencil,
-                            onSelect: () =>
-                              openGoal({
-                                index,
-                                name: entry.name,
-                                kind: entry.kind,
-                                value: entry.value,
-                              }),
-                          },
-                          {
-                            id: 'delete',
-                            label: 'Delete',
-                            icon: Trash2,
-                            tone: 'danger',
-                            separated: true,
-                            onSelect: () => {
-                              setDeletingGoal(entry);
-                              setLastGoal(entry);
-                            },
-                          },
-                        ]}
+                >
+                  <Loaded value={analytics} kind="switch">
+                    {(current) => (
+                      <Switch
+                        label="Cookieless counting"
+                        disabled={!manage}
+                        checked={current.cookieless}
+                        onChange={(cookieless) => save({ cookieless })}
                       />
-                    ) : null
-                  }
-                />
-              ))
-            )}
+                    )}
+                  </Loaded>
+                </SettingRow>
+                {COUNTING.map((entry) => (
+                  <SettingRow key={entry.id} title={entry.title} description={entry.hint}>
+                    <Loaded value={analytics} kind="switch">
+                      {(current) => (
+                        <Switch
+                          label={entry.title}
+                          disabled={!manage}
+                          checked={current[entry.id]}
+                          onChange={(next) => save({ [entry.id]: next })}
+                        />
+                      )}
+                    </Loaded>
+                  </SettingRow>
+                ))}
+                <SettingRow
+                  title="Keep analytics for"
+                  description="Visit counts and events older than this are deleted."
+                >
+                  <Loaded value={analytics}>
+                    {(current) => {
+                      const value = String(current.retentionDays);
+                      const choices = withValue(PERIODS, value, `${value} days`);
+                      return manage ? (
+                        <Select
+                          block
+                          label="Keep analytics for"
+                          value={value}
+                          onChange={(next) =>
+                            save({ retentionDays: Number(next) as Analytics['retentionDays'] })
+                          }
+                          options={choices}
+                        />
+                      ) : (
+                        <p className="text-control text-fg-meta">
+                          {choices.find((choice) => choice.value === value)?.label}
+                        </p>
+                      );
+                    }}
+                  </Loaded>
+                </SettingRow>
+              </>
+            ) : null}
           </SettingSection>
 
-          <SettingSection
-            title="Funnels"
-            description="Steps a visit takes in order, to see where visitors stop."
-            actions={
-              manage
-                ? addButton(
-                    'Add funnel',
-                    funnels.length >= MAX_FUNNELS,
-                    `A project has at most ${MAX_FUNNELS} funnels`,
-                    () => openFunnel(NEW_FUNNEL),
-                  )
-                : null
-            }
-          >
-            {!analytics ? (
-              <SkeletonItems count={2} />
-            ) : funnels.length === 0 ? (
-              <SettingsEmpty
-                icon={Filter}
-                title="No funnels"
-                description="Add a funnel of two to six pages or events to see where visitors drop off."
-              />
-            ) : (
-              funnels.map((entry, index) => (
-                <SettingsListItem
-                  key={`${index}:${entry.id}`}
-                  title={<span className="truncate">{entry.name}</span>}
+          {on ? (
+            <>
+              <SettingSection title="Feedback" description="Let visitors tell you what went wrong.">
+                <SettingRow
+                  title="Feedback button"
                   description={
-                    <span className="font-mono text-mono">
-                      {entry.steps.map((step) => step.value).join(' → ')}
-                    </span>
+                    <>
+                      Where a small Feedback button sits on your site. Hidden shows none: call{' '}
+                      {code("kimmi.feedback('...')")} from a button of your own. Messages arrive with
+                      the session they were sent from.
+                    </>
                   }
-                  actions={
-                    manage ? (
-                      <Menu
-                        align="end"
-                        trigger={<IconButton icon={MoreHorizontal} label="Funnel actions" />}
-                        actions={[
-                          {
-                            id: 'edit',
-                            label: 'Edit',
-                            icon: Pencil,
-                            onSelect: () =>
-                              openFunnel({
-                                index,
-                                name: entry.name,
-                                steps: entry.steps.map((step) => ({ ...step })),
-                              }),
-                          },
-                          {
-                            id: 'delete',
-                            label: 'Delete',
-                            icon: Trash2,
-                            tone: 'danger',
-                            separated: true,
-                            onSelect: () => {
-                              setDeletingFunnel(entry);
-                              setLastFunnel(entry);
-                            },
-                          },
-                        ]}
-                      />
-                    ) : null
-                  }
-                />
-              ))
-            )}
-          </SettingSection>
+                >
+                  <Loaded value={feedback} kind="field">
+                    {(current) => {
+                      const places = [
+                        { value: 'hidden', label: 'Hidden' },
+                        { value: 'bottom-right', label: 'Bottom right' },
+                        { value: 'bottom-left', label: 'Bottom left' },
+                      ];
+                      return manage ? (
+                        <Select
+                          block
+                          label="Feedback button"
+                          value={current.button}
+                          onChange={(button) =>
+                            update.mutate(
+                              { feedback: { button: button as typeof current.button } },
+                              { onSuccess: () => toast('Saved'), onError: failed },
+                            )
+                          }
+                          options={places}
+                        />
+                      ) : (
+                        <p className="text-control text-fg-meta">
+                          {places.find((place) => place.value === current.button)?.label}
+                        </p>
+                      );
+                    }}
+                  </Loaded>
+                </SettingRow>
+              </SettingSection>
+
+              <SettingSection
+                title="Goals"
+                description="A visit converts when it views a page or sends an event."
+                actions={
+                  manage
+                    ? addButton(
+                        'Add goal',
+                        goals.length >= MAX_GOALS,
+                        `A project has at most ${MAX_GOALS} goals`,
+                        () => openGoal(NEW_GOAL),
+                      )
+                    : null
+                }
+              >
+                {!analytics ? (
+                  <SkeletonItems count={2} />
+                ) : goals.length === 0 ? (
+                  <SettingsEmpty
+                    icon={Target}
+                    title="No goals"
+                    description="Add a goal to count the visits that reach a page or send an event."
+                  />
+                ) : (
+                  goals.map((entry, index) => (
+                    <SettingsListItem
+                      key={`${index}:${entry.id}`}
+                      title={<span className="truncate">{entry.name}</span>}
+                      description={
+                        <>
+                          {KIND_LABEL[entry.kind]}{' '}
+                          <span className="font-mono text-mono">{entry.value}</span>
+                        </>
+                      }
+                      actions={
+                        manage ? (
+                          <Menu
+                            align="end"
+                            trigger={<IconButton icon={MoreHorizontal} label="Goal actions" />}
+                            actions={[
+                              {
+                                id: 'edit',
+                                label: 'Edit',
+                                icon: Pencil,
+                                onSelect: () =>
+                                  openGoal({
+                                    index,
+                                    name: entry.name,
+                                    kind: entry.kind,
+                                    value: entry.value,
+                                  }),
+                              },
+                              {
+                                id: 'delete',
+                                label: 'Delete',
+                                icon: Trash2,
+                                tone: 'danger',
+                                separated: true,
+                                onSelect: () => {
+                                  setDeletingGoal(entry);
+                                  setLastGoal(entry);
+                                },
+                              },
+                            ]}
+                          />
+                        ) : null
+                      }
+                    />
+                  ))
+                )}
+              </SettingSection>
+
+              <SettingSection
+                title="Funnels"
+                description="Steps a visit takes in order, to see where visitors stop."
+                actions={
+                  manage
+                    ? addButton(
+                        'Add funnel',
+                        funnels.length >= MAX_FUNNELS,
+                        `A project has at most ${MAX_FUNNELS} funnels`,
+                        () => openFunnel(NEW_FUNNEL),
+                      )
+                    : null
+                }
+              >
+                {!analytics ? (
+                  <SkeletonItems count={2} />
+                ) : funnels.length === 0 ? (
+                  <SettingsEmpty
+                    icon={Filter}
+                    title="No funnels"
+                    description="Add a funnel of two to six pages or events to see where visitors drop off."
+                  />
+                ) : (
+                  funnels.map((entry, index) => (
+                    <SettingsListItem
+                      key={`${index}:${entry.id}`}
+                      title={<span className="truncate">{entry.name}</span>}
+                      description={
+                        <span className="font-mono text-mono">
+                          {entry.steps.map((step) => step.value).join(' → ')}
+                        </span>
+                      }
+                      actions={
+                        manage ? (
+                          <Menu
+                            align="end"
+                            trigger={<IconButton icon={MoreHorizontal} label="Funnel actions" />}
+                            actions={[
+                              {
+                                id: 'edit',
+                                label: 'Edit',
+                                icon: Pencil,
+                                onSelect: () =>
+                                  openFunnel({
+                                    index,
+                                    name: entry.name,
+                                    steps: entry.steps.map((step) => ({ ...step })),
+                                  }),
+                              },
+                              {
+                                id: 'delete',
+                                label: 'Delete',
+                                icon: Trash2,
+                                tone: 'danger',
+                                separated: true,
+                                onSelect: () => {
+                                  setDeletingFunnel(entry);
+                                  setLastFunnel(entry);
+                                },
+                              },
+                            ]}
+                          />
+                        ) : null
+                      }
+                    />
+                  ))
+                )}
+              </SettingSection>
+            </>
+          ) : null}
         </>
       )}
 

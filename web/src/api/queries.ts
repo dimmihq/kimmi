@@ -62,3 +62,15 @@ export function useProject(id: string | undefined) {
       queryClient.getQueryData<Project[]>(keys.projects)?.find((entry) => entry.id === id),
   });
 }
+
+/**
+ * Whether a project counts visits, read from the projects already loaded.
+ * `undefined` until the project is known: show neither the analytics pages
+ * nor a redirect away from them.
+ */
+export function useAnalyticsOn(id: string | undefined): boolean | undefined {
+  const projects = useProjects();
+  const listed = projects.data?.find((entry) => entry.id === id);
+  const single = useProject(id && projects.isSuccess && !listed ? id : undefined);
+  return (listed ?? single.data)?.analytics;
+}

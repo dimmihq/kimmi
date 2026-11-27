@@ -7,6 +7,8 @@ import {
   useRecordings,
   visitorLabel,
 } from '@/api/app';
+import { useMe } from '@/api/queries';
+import { canManage } from '@/api/settings';
 import { type Days, recordingsHref, useReleases } from '@/api/analytics';
 import type { Project, Recording } from '@/api/types';
 import { ago, bytes, compact, duration, flag } from '@/lib/format';
@@ -373,6 +375,7 @@ function RecentRecordings({ current, base }: { current: Project; base: string })
 export function Overview() {
   const current = useProjectScope();
   const base = `/projects/${current.id}`;
+  const manage = canManage(useMe().data?.user.role);
   const [range, setRange] = useState<Range>('14');
   const overview = useOverview(current.id, Number(range));
   const data = overview.data;
@@ -431,6 +434,23 @@ export function Overview() {
             <span className="font-mono">{current.slug}</span> · {bytes(current.stats.storageBytes)}{' '}
             stored · kept {current.retentionDays} days
           </p>
+          {current.analytics ? null : (
+            <p className="mt-0.5 text-hint text-fg-meta">
+              This project records sessions only.
+              {manage ? (
+                <>
+                  {' '}
+                  <Link
+                    to={`${base}/settings/analytics`}
+                    className="text-fg-secondary underline underline-offset-2 hover:text-fg"
+                  >
+                    Turn on analytics
+                  </Link>{' '}
+                  to count visits, sources, funnels and heatmaps.
+                </>
+              ) : null}
+            </p>
+          )}
         </div>
         <Tag tone="brand" dot>
           {current.stats.live} live now
@@ -524,9 +544,11 @@ export function Overview() {
               title="Top pages"
               description="Page views and rage clicks in recordings"
               action={
-                <Link to={`${base}/friction`} className={quietLink}>
-                  Friction by page
-                </Link>
+                current.analytics ? (
+                  <Link to={`${base}/friction`} className={quietLink}>
+                    Friction by page
+                  </Link>
+                ) : undefined
               }
             />
             {data ? (

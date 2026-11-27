@@ -50,9 +50,10 @@ import {
   isUnder,
   type NavPage,
   OVERVIEW,
-  PROJECT_GROUPS,
   PROJECT_PAGES,
   PROJECT_SETTINGS,
+  projectGroups,
+  visiblePages,
   WORKSPACE_SETTINGS,
 } from './nav';
 import { ErrorNote, Skeleton } from './states';
@@ -367,7 +368,7 @@ function Sidebar({
                     </button>
                     {open ? (
                       <div className="ml-[19px] flex animate-swap-in flex-col gap-px border-l border-line pl-2">
-                        {PROJECT_SETTINGS.map((page) => (
+                        {visiblePages(PROJECT_SETTINGS, option.analytics).map((page) => (
                           <NavLink
                             key={page.key}
                             page={page}
@@ -386,9 +387,9 @@ function Sidebar({
         ) : project ? (
           <>
             <NavLink page={OVERVIEW} href={base} pathname={pathname} exact onNavigate={onNavigate} />
-            {PROJECT_GROUPS.map((group) => (
+            {projectGroups(project.analytics).map((group) => (
               <SidebarGroup key={group.label} label={group.label}>
-                {PROJECT_PAGES.filter((page) => group.keys.includes(page.key)).map((page) => (
+                {group.pages.map((page) => (
                   <NavLink
                     key={page.key}
                     page={page}

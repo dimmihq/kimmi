@@ -127,16 +127,18 @@ export function Retention() {
               </Loaded>
             </SettingRow>
           </SettingSection>
-          <p className="mt-3 text-meta text-fg-meta">
-            Visit counts and events are kept separately: see{' '}
-            <Link
-              to={`/projects/${projectId}/settings/analytics`}
-              className="text-fg-secondary underline underline-offset-2 hover:text-fg"
-            >
-              Analytics
-            </Link>
-            .
-          </p>
+          {project.data?.analytics ? (
+            <p className="mt-3 text-meta text-fg-meta">
+              Visit counts and events are kept separately: see{' '}
+              <Link
+                to={`/projects/${projectId}/settings/analytics`}
+                className="text-fg-secondary underline underline-offset-2 hover:text-fg"
+              >
+                Analytics
+              </Link>
+              .
+            </p>
+          ) : null}
         </>
       )}
 

@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { type Share, useCreateShare, useDeleteShare, useShares } from '@/api/analytics';
 import { errorMessage } from '@/api/http';
-import { useMe, useProject } from '@/api/queries';
+import { useAnalyticsOn, useMe, useProject } from '@/api/queries';
 import { canManage, useProjectSettings, useUpdateProjectSettings } from '@/api/settings';
 import { ago, day, duration } from '@/lib/format';
 import {
@@ -35,8 +35,8 @@ const EXPIRY: Option<Expiry>[] = [
   { value: '30', label: '30 days' },
 ];
 
-const PUBLIC_LINKS =
-  'Admins can create links that let anyone watch one recording, or see the analytics page, without signing in. Links expire. Masked content stays masked. Turning this off stops every existing link at once.';
+const publicLinks = (analytics: boolean) =>
+  `Admins can create links that let anyone watch one recording${analytics ? ', or see the analytics page,' : ''} without signing in. Links expire. Masked content stays masked. Turning this off stops every existing link at once.`;
 
 export function SharingSettings() {
   const { projectId = '' } = useParams();
@@ -48,6 +48,8 @@ export function SharingSettings() {
   const createShare = useCreateShare(projectId);
   const deleteShare = useDeleteShare(projectId);
   const sharing = settings.data?.sharing;
+  // The analytics page exists, and can be shared, only while visits are counted.
+  const analyticsOn = useAnalyticsOn(projectId) === true;
 
   const [creating, setCreating] = useState(false);
   const [expiry, setExpiry] = useState<Expiry>('7');
@@ -87,7 +89,7 @@ export function SharingSettings() {
       ) : (
         <>
           <SettingSection title="Public links">
-            <SettingRow title="Allow public links" description={PUBLIC_LINKS}>
+            <SettingRow title="Allow public links" description={publicLinks(analyticsOn)}>
               <Loaded value={sharing} kind="switch">
                 {(current) => (
                   <Switch
@@ -106,20 +108,22 @@ export function SharingSettings() {
             </SettingRow>
           </SettingSection>
 
-          <SettingSection title="Analytics link">
-            <SettingRow
-              title="Share the analytics page"
-              description="Anyone with the link sees visits, sources and pages. Recordings are not included."
-            >
-              <Button
-                icon={Link2}
-                disabled={!isAdmin || !sharing?.enabled}
-                onClick={() => setCreating(true)}
+          {analyticsOn ? (
+            <SettingSection title="Analytics link">
+              <SettingRow
+                title="Share the analytics page"
+                description="Anyone with the link sees visits, sources and pages. Recordings are not included."
               >
-                Create link
-              </Button>
-            </SettingRow>
-          </SettingSection>
+                <Button
+                  icon={Link2}
+                  disabled={!isAdmin || !sharing?.enabled}
+                  onClick={() => setCreating(true)}
+                >
+                  Create link
+                </Button>
+              </SettingRow>
+            </SettingSection>
+          ) : null}
         </>
       )}
 
@@ -134,7 +138,11 @@ export function SharingSettings() {
           <SettingsEmpty
             icon={Link2}
             title="No active links"
-            description="Links to a recording or to the analytics page are listed here until they expire."
+            description={
+              analyticsOn
+                ? 'Links to a recording or to the analytics page are listed here until they expire.'
+                : 'Links to a recording are listed here until they expire.'
+            }
           />
         ) : (
           shares.data.map((share) => {

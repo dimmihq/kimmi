@@ -37,6 +37,7 @@ import { VisitorDetail } from './pages/VisitorDetail';
 import { Visitors } from './pages/Visitors';
 import { AppFrame } from './shell/AppFrame';
 import { type ReturnState, returnPath } from './shell/auth';
+import { NeedsAnalytics } from './shell/NeedsAnalytics';
 import { ErrorNote } from './shell/states';
 import { Toaster, TooltipProvider } from './ui';
 
@@ -87,14 +88,16 @@ export function App() {
               <Route index element={<Overview />} />
               <Route path="recordings" element={<Recordings />} />
               <Route path="recordings/:recordingId" element={<Player />} />
-              <Route path="analytics" element={<Analytics />} />
-              <Route path="funnels" element={<Funnels />} />
-              <Route path="heatmaps" element={<Heatmaps />} />
-              <Route path="errors" element={<Errors />} />
-              <Route path="errors/:fingerprint" element={<ErrorDetail />} />
-              <Route path="friction" element={<Friction />} />
-              <Route path="performance" element={<Performance />} />
-              <Route path="feedback" element={<Feedback />} />
+              <Route element={<NeedsAnalytics />}>
+                <Route path="analytics" element={<Analytics />} />
+                <Route path="funnels" element={<Funnels />} />
+                <Route path="heatmaps" element={<Heatmaps />} />
+                <Route path="errors" element={<Errors />} />
+                <Route path="errors/:fingerprint" element={<ErrorDetail />} />
+                <Route path="friction" element={<Friction />} />
+                <Route path="performance" element={<Performance />} />
+                <Route path="feedback" element={<Feedback />} />
+              </Route>
               <Route path="live" element={<Live />} />
               <Route path="visitors" element={<Visitors />} />
               <Route path="visitors/:visitorId" element={<VisitorDetail />} />
@@ -104,7 +107,9 @@ export function App() {
               <Route path="settings/privacy" element={<Privacy />} />
               <Route path="settings/capture" element={<Capture />} />
               <Route path="settings/analytics" element={<AnalyticsSettings />} />
-              <Route path="settings/alerts" element={<AlertSettings />} />
+              <Route element={<NeedsAnalytics settings />}>
+                <Route path="settings/alerts" element={<AlertSettings />} />
+              </Route>
               <Route path="settings/sharing" element={<SharingSettings />} />
               <Route path="settings/retention" element={<Retention />} />
               <Route path="settings/members" element={<ProjectMembers />} />

@@ -100,6 +100,9 @@ importers:
       vitest:
         specifier: ^5.1.2
         version: 5.1.2(@types/node@24.19.4)(happy-dom@21.0.4)(vite@8.4.0(@types/node@24.19.4)(esbuild@0.28.2)(jiti@2.7.0))
+      web-vitals:
+        specifier: ^6.2.3
+        version: 6.2.3
 
   web:
     dependencies:
@@ -2069,6 +2072,9 @@ packages:
       jsdom:
         optional: true
 
+  web-vitals@6.2.3:
+    resolution: {integrity: sha512-Dmy+vdO1UPMqXiAtZSNayhl4f794Bxfd94W4HIj2HlYtczEQfEOon969memlcpcHrTuOKLa5baFjX7WbgmOq+A==}
+
   whatwg-mimetype@3.0.0:
     resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
     engines: {node: '>=12'}
@@ -3501,6 +3507,8 @@ snapshots:
       happy-dom: 21.0.4
     transitivePeerDependencies:
       - msw
+
+  web-vitals@6.2.3: {}
 
   whatwg-mimetype@3.0.0: {}
 

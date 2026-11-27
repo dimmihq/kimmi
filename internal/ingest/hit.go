@@ -289,6 +289,8 @@ type feedbackBody struct {
 	Path        string `json:"path"`
 	Text        string `json:"text"`
 	Email       string `json:"email"`
+	// At is honoured only with Handler.TrustClock.
+	At int64 `json:"at"`
 }
 
 func (h *Handler) feedback(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +309,9 @@ func (h *Handler) feedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	if h.TrustClock && in.At > 0 {
+		now = time.UnixMilli(in.At)
+	}
 	key, _, err := h.visitorKey(r, p, in.AnonymousID, now)
 	if err != nil {
 		w.Header().Set("Retry-After", "2")

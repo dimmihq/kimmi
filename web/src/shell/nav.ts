@@ -36,6 +36,8 @@ export interface NavPage {
   href: string;
   description: string;
   keywords?: string[];
+  /** Has nothing to show until the project counts visits. */
+  needs?: 'analytics';
 }
 
 export const OVERVIEW: NavPage = {
@@ -50,6 +52,7 @@ export const OVERVIEW: NavPage = {
 export const PROJECT_PAGES: NavPage[] = [
   {
     key: 'analytics',
+    needs: 'analytics',
     label: 'Analytics',
     icon: BarChart3,
     href: '/analytics',
@@ -82,6 +85,7 @@ export const PROJECT_PAGES: NavPage[] = [
   },
   {
     key: 'funnels',
+    needs: 'analytics',
     label: 'Funnels',
     icon: Filter,
     href: '/funnels',
@@ -90,6 +94,7 @@ export const PROJECT_PAGES: NavPage[] = [
   },
   {
     key: 'heatmaps',
+    needs: 'analytics',
     label: 'Heatmaps',
     icon: Flame,
     href: '/heatmaps',
@@ -98,6 +103,7 @@ export const PROJECT_PAGES: NavPage[] = [
   },
   {
     key: 'errors',
+    needs: 'analytics',
     label: 'Errors',
     icon: Bug,
     href: '/errors',
@@ -106,6 +112,7 @@ export const PROJECT_PAGES: NavPage[] = [
   },
   {
     key: 'friction',
+    needs: 'analytics',
     label: 'Friction',
     icon: MousePointerClick,
     href: '/friction',
@@ -114,6 +121,7 @@ export const PROJECT_PAGES: NavPage[] = [
   },
   {
     key: 'performance',
+    needs: 'analytics',
     label: 'Performance',
     icon: Gauge,
     href: '/performance',
@@ -122,6 +130,7 @@ export const PROJECT_PAGES: NavPage[] = [
   },
   {
     key: 'feedback',
+    needs: 'analytics',
     label: 'Feedback',
     icon: MessageSquare,
     href: '/feedback',
@@ -180,6 +189,7 @@ export const PROJECT_SETTINGS: NavPage[] = [
   },
   {
     key: 'alerts',
+    needs: 'analytics',
     label: 'Alerts',
     icon: Bell,
     href: '/settings/alerts',
@@ -288,3 +298,23 @@ export const isSettingsPath = (pathname: string) =>
   /^\/settings(\/|$)|^\/projects\/[^/]+\/settings(\/|$)/.test(pathname);
 
 export const DOCS_URL = 'https://trykimmi.com/docs';
+
+/**
+ * Whether a project counts visits: `undefined` while the project is loading,
+ * when only the pages that work from recordings alone are shown.
+ */
+export type AnalyticsState = boolean | undefined;
+
+/** The entries a project shows: those that need analytics only once it is on. */
+export const visiblePages = <T extends Pick<NavPage, 'needs'>>(pages: T[], analytics: AnalyticsState) =>
+  pages.filter((page) => !page.needs || analytics === true);
+
+/** The sidebar's groups with their pages; a group with none is left out. */
+export const projectGroups = (analytics: AnalyticsState) =>
+  PROJECT_GROUPS.map((group) => ({
+    label: group.label,
+    pages: visiblePages(
+      PROJECT_PAGES.filter((page) => group.keys.includes(page.key)),
+      analytics,
+    ),
+  })).filter((group) => group.pages.length > 0);
