@@ -28,7 +28,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `pnpm run build && pnpm exec vite preview --port ${SHOP_PORT} --strictPort`,
+      command: `pnpm exec vite build --outDir .stack-shop && node ../../sdk/browser/test/stack/serve.mjs .stack-shop ${SHOP_PORT}`,
       cwd: '../../../../examples/react-spa',
       url: `http://localhost:${SHOP_PORT}`,
       env: { VITE_KIMMI_KEY: KEY, VITE_KIMMI_HOST: KIMMI },
