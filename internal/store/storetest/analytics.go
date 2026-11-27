@@ -486,7 +486,8 @@ func testRetention(t *testing.T, s store.Store) {
 		visit("A", base+8*day), visit("C", base+9*day), visit("A", base+15*day), visit("A", base+15*day+hour),
 		visit("B", base+16*day+hour), daily)
 
-	now := base + 17*day
+	// Later on the day of the last visits: "today" is the project's calendar day.
+	now := base + 16*day + 12*hour
 	r, err := s.Retention(ctx, store.RetentionQuery{ProjectID: p.ID, Now: now, Weeks: 3})
 	must(t, err)
 	eq(t, "daily", r.Daily, 1)
@@ -503,12 +504,16 @@ func testRetention(t *testing.T, s store.Store) {
 	eq(t, "oldest cohort first", r.Cohorts[0].Week, "2026-04-27")
 	eq(t, "first seen before the first week", r.Cohorts[3].Week+fmt.Sprint(r.Cohorts[3].Size, r.Cohorts[3].Active), "2026-05-18"+"1 [1 0 1 0 0]")
 
-	// Two hours east, Sunday 23:00 UTC already belongs to Monday's week.
-	apply(t, s, visit("E", base+7*day-hour))
+	// A visit belongs to the week of its project's time zone, fixed when it
+	// arrives: two hours east, Sunday 23:00 UTC is already Monday.
+	east := seedProject(t, s, org.ID, "east")
+	sunday := hit(east, "e1", "E", base+7*day-hour, pageEv(0, "/"))
+	sunday.DayOffsetMs = 2 * hour
+	apply(t, s, sunday, hit(p, "e2", "E", base+7*day-hour, pageEv(0, "/")))
 	r, _ = s.Retention(ctx, store.RetentionQuery{ProjectID: p.ID, Now: now, Weeks: 3})
 	eq(t, "utc week", r.Cohorts[0].Size, 3)
-	r, _ = s.Retention(ctx, store.RetentionQuery{ProjectID: p.ID, Now: now, Weeks: 3, DayOffsetMs: 2 * hour})
-	eq(t, "shifted week", fmt.Sprint(r.Cohorts[0].Size, r.Cohorts[1].Size), "2 2")
+	r, _ = s.Retention(ctx, store.RetentionQuery{ProjectID: east.ID, Now: now, Weeks: 3, DayOffsetMs: 2 * hour})
+	eq(t, "shifted week", fmt.Sprint(r.Cohorts[0].Size, r.Cohorts[1].Size), "0 1")
 	eq(t, "shifted label", r.Cohorts[1].Week, "2026-06-08")
 
 	r, err = s.Retention(ctx, store.RetentionQuery{ProjectID: "nope", Now: now})

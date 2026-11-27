@@ -53,8 +53,9 @@ type visitDelta struct {
 	exit      string
 	events    [][]store.Event // each hit's events, not copied
 	returning bool
-	counted   string // what the daily tables have already counted this visit for
-	day       int64  // the project's day the visit started on
+	counted   string         // what the daily tables have already counted this visit for
+	day       int64          // the project's day the visit started on
+	funnels   map[string]int // how many steps of each funnel the visit had done before
 }
 
 func (d *DB) ApplyHits(ctx context.Context, hits []store.Hit) error {
@@ -167,6 +168,30 @@ func aggregateVisits(ctx context.Context, c conn, hits []store.Hit) ([]*visitDel
 		}
 		if err := rows.Close(); err != nil {
 			return nil, fmt.Errorf("load visits: %w", err)
+		}
+	}
+	// How far the visits already known had got in the project's funnels.
+	for part := range slices.Chunk(ids, rowsPerStatement) {
+		rows, err := c.query(ctx, "SELECT visit_id, funnel_id, step FROM funnel_visits WHERE visit_id IN ("+placeholders(len(part))+")", inArgs(part)...)
+		if err != nil {
+			return nil, fmt.Errorf("load funnel progress: %w", err)
+		}
+		for rows.Next() {
+			var visit, funnel string
+			var step int
+			if err := rows.Scan(&visit, &funnel, &step); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("load funnel progress: %w", err)
+			}
+			if v := byID[visit]; v != nil {
+				if v.funnels == nil {
+					v.funnels = map[string]int{}
+				}
+				v.funnels[funnel] = step + 1
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("load funnel progress: %w", err)
 		}
 	}
 	// A visit id is chosen by the browser: one that already belongs to
@@ -322,7 +347,7 @@ func (d *DB) DeleteAnalyticsBefore(ctx context.Context, projectID string, before
 		// The daily tables go by whole days: a day is dropped once all of
 		// it is older than the limit, whatever the project's time zone.
 		day := before/store.DayMs - 1
-		for _, table := range []string{"stats_daily", "events_daily", "heat_daily"} {
+		for _, table := range []string{"stats_daily", "events_daily", "heat_daily", "funnel_daily", "funnel_visits"} {
 			if _, err := c.exec(ctx, "DELETE FROM "+table+" WHERE project_id = ? AND day < ?", projectID, day); err != nil {
 				return err
 			}
@@ -364,12 +389,17 @@ func (d *DB) deleteVisitorAnalytics(ctx context.Context, c conn, projectID, visi
 	if err := rows.Close(); err != nil {
 		return err
 	}
+	if err := forgetKnown(ctx, c, projectID, key); err != nil {
+		return err
+	}
 	visits := "SELECT id FROM visits WHERE project_id = ? AND visitor_key = ?"
 	sessions := "SELECT id FROM sessions WHERE visitor_id = ? AND project_id = ?"
 	for _, q := range []struct {
 		sql  string
 		args []any
 	}{
+		{"DELETE FROM funnel_visits WHERE visit_id IN (" + visits + ")", []any{projectID, key}},
+		{"DELETE FROM funnel_visits WHERE visit_id IN (" + sessions + ")", []any{visitorID, projectID}},
 		{"DELETE FROM events WHERE visit_id IN (" + visits + ")", []any{projectID, key}},
 		{"DELETE FROM events WHERE visit_id IN (" + sessions + ")", []any{visitorID, projectID}},
 		{"DELETE FROM feedback WHERE project_id = ? AND (visitor_key = ? OR visit_id IN (" + sessions + "))", []any{projectID, key, visitorID, projectID}},
@@ -388,7 +418,8 @@ func (d *DB) deleteVisitorAnalytics(ctx context.Context, c conn, projectID, visi
 // deleteProjectAnalytics removes everything a project holds beside its
 // recordings. It runs inside DeleteProject's transaction.
 func deleteProjectAnalytics(ctx context.Context, c conn, projectID string) error {
-	for _, table := range []string{"events", "visits", "feedback", "notes", "shares", "project_state", "stats_daily", "events_daily", "heat_daily"} {
+	for _, table := range []string{"events", "visits", "feedback", "notes", "shares", "project_state", "stats_daily", "events_daily", "heat_daily",
+		"funnel_daily", "funnel_visits", "known_visitors", "cohort_weekly"} {
 		if _, err := c.exec(ctx, "DELETE FROM "+table+" WHERE project_id = ?", projectID); err != nil {
 			return err
 		}

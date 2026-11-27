@@ -106,6 +106,7 @@ Every row carries `org_id`; anything project-scoped carries `project_id`. Ids ar
 - `notes(id, org_id, project_id, session_id, user_id, at_ms, body, created_at)`
 - `shares(id, org_id, project_id, kind recording|dashboard, session_id, start_ms, token_hash unique, created_by, created_at, expires_at)`
 - `feedback(id, org_id, project_id, visit_id, visitor_key, path, body, email, created_at, seen)`
+- `stats_daily(project_id, day, dim, k, visits, pageviews, bounces, duration_ms, new_visitors, time_ms, scroll_sum, scroll_n, exits, sketch)`, `events_daily(project_id, day, kind, name, path, n, visits, value, aux, num, first_ts, last_ts, label, props, last_visit)`, `heat_daily(project_id, day, path, device, x, y, n)`, `funnel_daily(project_id, day, funnel_id, step, visits)`, `funnel_visits(visit_id, funnel_id, project_id, day, step)`, `known_visitors(project_id, visitor_key, first_week, weeks)`, `cohort_weekly(project_id, cohort, week, visitors)`: what the analytics pages read (see Daily tables)
 - `salts(day, salt)` the secret of each day's cookieless hashes; only today's is kept
 - `project_state(project_id, name, value, updated_at)` when an alert last fired, which week's digest was sent
 
@@ -116,6 +117,18 @@ Postgres: `sessions` is partitioned by day on `started_at`; retention drops whol
 1. **Live.** The ingest handler never decompresses the events. It copies each batch's compressed bytes into an in-memory buffer (bounded by `KIMMI_INGEST_BUFFER`, past which batches get `503`) and, every `KIMMI_FLUSH_INTERVAL` or as soon as 8 MiB (at most a quarter of the buffer) wait, streams one object `live/{yyyy-mm-dd}/{node}-{unixms}.bin` holding all buffered blocks back to back, then inserts `blocks` rows (file key, offset, length) and upserts the `sessions` rows from the batch metadata. A graceful shutdown flushes first.
 2. **Sealed.** The worker finds sessions idle longer than `KIMMI_SESSION_IDLE`, reads their blocks in `seq` order, streams each one through gunzip event by event (one session and one sealing run at a time; a single event over 64 MiB is refused), re-encodes the session as zstd chunks of about 1 MB split on event boundaries, appends them to a per-project object `sealed/{retentionDays}d/{projectId}/{yyyy-mm-dd}/{uuid}.bin` (one new object per project per sealing run, closed at about 8 MiB and continued in another, since S3 objects cannot be appended to and the object is built in memory; chunks close at block boundaries, and only a single block over 1 MB is split between events), stores `sealed_key` and `sealed_chunks` (offset, length, first_ts, last_ts, events, first_seq, last_seq) on the session, and deletes its `blocks` rows. Live objects with no remaining blocks are deleted.
 3. **Cleanup.** Nightly (and on demand): sessions past their project's retention are marked deleted and their sealed objects removed when no live session references them.
+
+### Daily tables
+
+The analytics pages do not sum visits and events when they are opened: that would slow down with traffic. Every flush of hits also adds to the daily tables, in its own transaction, and the pages read those: a few rows per day and value, whatever the volume.
+
+- A day is the project's own day (its time zone when the visit arrived), by the visit's start.
+- `stats_daily` holds, per day, dimension (`all`, `source`, `channel`, `campaign`, `entry`, `exit`, `country`, `device`, `browser`, `os`, `language`, `page`, and the one-row `returning` and `known`) and value, the sums and a sketch of the distinct visitors. A sketch keeps visitors one by one while they are few (2,048 for the totals, 128 for a breakdown row) and is a HyperLogLog estimate beyond: unique visitors are then right to about 1% for totals and 3% for a breakdown row. Visits, page views, bounces and every other count are exact.
+- `events_daily` holds, per day, kind, name and path, how often and in how many visits, and the latest occurrence. Web vitals are counted in 10% steps with their sum, so a 75th percentile is right to within a few percent.
+- A funnel is counted as visits come in: `funnel_visits` keeps how far each visit got, `funnel_daily` how many reached each step. A funnel that is new, or whose steps changed (it then gets a new id), is counted over the stored visits in the background right after the settings are saved.
+- Cohorts are kept per visitor with a lasting identity (`known_visitors`) and summed in `cohort_weekly`, whatever order visits arrive in. "Active today, in 7 days, in 30 days" are calendar days of the project.
+- A report narrowed to some visits (one source, one page, one country) cannot be answered from sums and reads the visits and events of the window; so does the list of a group's occurrences.
+- Erasing a visitor counts the days they were seen on again from the remaining visits, and takes them out of the cohorts and funnels.
 
 ### What is kept how long, and what erasing removes
 

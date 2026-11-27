@@ -193,7 +193,16 @@ func (a *API) runFunnel(r *http.Request, proj store.Project, f settings.Funnel) 
 	for i, s := range f.Steps {
 		steps[i] = step(s)
 	}
-	res, err := a.Store.Funnel(r.Context(), analyticsQuery(r, proj), steps)
+	// Counted as visits came in; narrowed to some visits it has to be
+	// worked out from their events.
+	q := analyticsQuery(r, proj)
+	var res []store.FunnelStep
+	var err error
+	if q.Filter == (store.VisitFilter{}) {
+		res, err = a.Store.FunnelCounts(r.Context(), q, f.ID, len(steps))
+	} else {
+		res, err = a.Store.Funnel(r.Context(), q, steps)
+	}
 	if err != nil {
 		return funnelView{}, nil, err
 	}

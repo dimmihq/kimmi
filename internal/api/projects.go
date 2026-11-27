@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -258,12 +259,14 @@ func (a *API) patchSettings(w http.ResponseWriter, r *http.Request, _ *principal
 		a.fail(w, r, invalid("Check the highlighted settings", fields))
 		return
 	}
+	changed, gone := changedFunnels(projectSettings(proj).Analytics.Funnels, &next.Analytics.Funnels)
 	proj.Settings, proj.RetentionDays, proj.KeepStarred = next.Encode(), next.Retention.Days, next.Retention.KeepStarred
 	if err := a.Store.UpdateProject(r.Context(), proj); err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	a.Projects.Invalidate(r.Context())
+	a.countFunnels(proj.ID, changed, gone)
 	writeJSON(w, http.StatusOK, next)
 }
 
@@ -362,3 +365,66 @@ func (a *API) deleteRecordings(w http.ResponseWriter, r *http.Request, _ *princi
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"deleted": n})
 }
+
+// changedFunnels compares the funnels before and after a settings change.
+// A funnel whose steps changed is another funnel: it gets a new id, so the
+// counts kept under the old one are not mixed with it. It returns the
+// funnels to count over the stored visits and the ids to forget.
+func changedFunnels(before []settings.Funnel, after *[]settings.Funnel) (count []store.Funnel, gone []string) {
+	old := map[string]settings.Funnel{}
+	for _, f := range before {
+		old[f.ID] = f
+	}
+	kept := map[string]bool{}
+	for i := range *after {
+		f := &(*after)[i]
+		was, existed := old[f.ID]
+		if existed && slices.Equal(was.Steps, f.Steps) {
+			kept[f.ID] = true
+			continue
+		}
+		if existed {
+			f.ID = settings.NewID()
+		}
+		steps := make([]store.Step, len(f.Steps))
+		for j, st := range f.Steps {
+			steps[j] = step(st)
+		}
+		count = append(count, store.Funnel{ID: f.ID, Steps: steps})
+	}
+	for id := range old {
+		if !kept[id] {
+			gone = append(gone, id)
+		}
+	}
+	return count, gone
+}
+
+// countFunnels counts new funnels over the visits already stored and
+// forgets removed ones, after the answer has gone out: with months of
+// events it takes a moment, and the funnel fills in when it is done.
+func (a *API) countFunnels(projectID string, count []store.Funnel, gone []string) {
+	if len(count) == 0 && len(gone) == 0 {
+		return
+	}
+	a.background.Add(1)
+	go func() {
+		defer a.background.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		for _, id := range gone {
+			if err := a.Store.BackfillFunnel(ctx, projectID, store.Funnel{ID: id}); err != nil {
+				a.Log.Error("forget funnel", "project", projectID, "err", err)
+			}
+		}
+		for _, f := range count {
+			if err := a.Store.BackfillFunnel(ctx, projectID, f); err != nil {
+				a.Log.Error("count funnel", "project", projectID, "funnel", f.ID, "err", err)
+			}
+		}
+	}()
+}
+
+// Wait returns once the work started in the background by earlier requests
+// is done. Tests use it; a server shutting down may too.
+func (a *API) Wait() { a.background.Wait() }

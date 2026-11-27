@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/dimmihq/kimmi/internal/auth"
@@ -43,6 +44,9 @@ type API struct {
 
 	Version, Commit string
 	StartedAt       time.Time
+
+	// background counts work that outlives its request.
+	background sync.WaitGroup
 }
 
 // IngestHealth is the ingest state shown on the instance page.

@@ -31,6 +31,12 @@ type Analytics interface {
 	// Funnel counts the visits that reached each step in order, and lists
 	// up to 200 visits that stopped after each step.
 	Funnel(ctx context.Context, q AnalyticsQuery, steps []Step) ([]FunnelStep, error)
+	// FunnelCounts is Funnel for a funnel the project has defined, read
+	// from what was counted as visits came in.
+	FunnelCounts(ctx context.Context, q AnalyticsQuery, funnelID string, steps int) ([]FunnelStep, error)
+	// BackfillFunnel counts a new or changed funnel over the visits already
+	// stored; with no steps it only forgets the funnel.
+	BackfillFunnel(ctx context.Context, projectID string, f Funnel) error
 	HeatmapPages(ctx context.Context, q AnalyticsQuery) ([]PathCount, error)
 	Heatmap(ctx context.Context, q HeatmapQuery) (Heatmap, error)
 	Retention(ctx context.Context, q RetentionQuery) (Retention, error)
@@ -111,7 +117,16 @@ type Hit struct {
 	Language    string
 	ViewportW   int
 	Release     string
-	Events      []Event
+	// Funnels are the project's funnels when the hit arrived: how far each
+	// visit gets is worked out as its events come in.
+	Funnels []Funnel
+	Events  []Event
+}
+
+// Funnel is an ordered list of steps with the id its counts are kept under.
+type Funnel struct {
+	ID    string
+	Steps []Step
 }
 
 // Event is one row of the event index.

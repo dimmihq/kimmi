@@ -26,6 +26,8 @@ type Project struct {
 	// zone is the project's time zone: its days are the days of the
 	// daily tables.
 	zone *time.Location
+	// Funnels are the project's funnels, as every hit carries them.
+	Funnels []store.Funnel
 }
 
 // DayOffsetMs is how far the project's time zone is ahead of UTC at t.
@@ -89,6 +91,13 @@ func (c *Cache) Load(ctx context.Context) error {
 			Config: configBody(true, s), Settings: s}
 		if zone, err := time.LoadLocation(p.Timezone); err == nil {
 			proj.zone = zone
+		}
+		for _, f := range s.Analytics.Funnels {
+			steps := make([]store.Step, len(f.Steps))
+			for i, st := range f.Steps {
+				steps[i] = store.Step{Kind: st.Kind, Value: st.Value}
+			}
+			proj.Funnels = append(proj.Funnels, store.Funnel{ID: f.ID, Steps: steps})
 		}
 		next[p.PublicKey] = proj
 		byID[p.ID] = proj

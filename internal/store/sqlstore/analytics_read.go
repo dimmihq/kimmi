@@ -951,7 +951,7 @@ func (d *DB) heatSnapshot(ctx context.Context, q store.HeatmapQuery) (*store.Hea
 
 // Retention counts only visitors with an anonymous id: a cookieless hash
 // changes every day, so it can never come back.
-func (d *DB) Retention(ctx context.Context, q store.RetentionQuery) (store.Retention, error) {
+func (d *DB) retentionRaw(ctx context.Context, q store.RetentionQuery) (store.Retention, error) {
 	r := store.Retention{Cohorts: []store.Cohort{}}
 	const known = "project_id = ? AND visitor_key LIKE 'a:%'"
 	err := d.r.row(ctx, `SELECT COUNT(DISTINCT CASE WHEN started_at >= ? THEN visitor_key END),

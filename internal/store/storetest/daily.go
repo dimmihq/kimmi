@@ -19,6 +19,7 @@ func testDailyAgrees(t *testing.T, s store.Store) {
 	paths := []string{"/", "/pricing", "/cart", "/checkout", "/thanks"}
 	sources := []string{"", "google.com", "t.co", "news.example"}
 
+	funnel := store.Funnel{ID: "f1", Steps: []store.Step{{Kind: "page", Value: "/"}, {Kind: "page", Value: "/c*"}, {Kind: "event", Value: "signup"}}}
 	// 240 visits by 150 visitors over three days, each sent as one to four
 	// hits; the hits of all visits are shuffled into flushes of thirty.
 	var hits []store.Hit
@@ -60,7 +61,7 @@ func testDailyAgrees(t *testing.T, s store.Store) {
 			}
 			ts += 1000
 			h := hit(p, fmt.Sprintf("visit-%d", v), visitor, ts, events...)
-			h.StartedAt, h.Referrer = start, source
+			h.StartedAt, h.Referrer, h.Funnels = start, source, []store.Funnel{funnel}
 			_ = part
 			hits = append(hits, h)
 		}
@@ -162,6 +163,33 @@ func testDailyAgrees(t *testing.T, s store.Store) {
 	must(t, err)
 	eq(t, "goals", fmt.Sprint(counts), fmt.Sprint(rawCounts))
 
+	// The funnel counted as hits came in, worked out from the events, and
+	// counted again over the stored visits all say the same.
+	steps, err := s.Funnel(ctx, q, funnel.Steps)
+	must(t, err)
+	if steps[0].Visits == 0 || steps[2].Visits == 0 || steps[2].Visits >= steps[0].Visits {
+		t.Fatalf("the funnel is not much of a test: %+v", steps)
+	}
+	check := func(what, id string) {
+		t.Helper()
+		got, err := s.FunnelCounts(ctx, q, id, len(funnel.Steps))
+		must(t, err)
+		for i := range steps {
+			eq(t, fmt.Sprint(what, " step ", i), got[i].Visits, steps[i].Visits)
+			eq(t, fmt.Sprint(what, " stopped after step ", i), len(got[i].Dropped), len(steps[i].Dropped))
+		}
+	}
+	check("counted at ingest", "f1")
+	later := store.Funnel{ID: "f2", Steps: funnel.Steps}
+	must(t, s.BackfillFunnel(ctx, p.ID, later))
+	check("counted afterwards", "f2")
+	must(t, s.BackfillFunnel(ctx, p.ID, later)) // again: the same, not double
+	check("counted twice", "f2")
+	must(t, s.BackfillFunnel(ctx, p.ID, store.Funnel{ID: "f2"}))
+	gone, err := s.FunnelCounts(ctx, q, "f2", 3)
+	must(t, err)
+	eq(t, "a forgotten funnel", gone[0].Visits, 0)
+
 	hq := store.HeatmapQuery{ProjectID: p.ID, From: base, To: base + 4*day, Path: "/"}
 	heat, err := s.Heatmap(ctx, hq)
 	must(t, err)
@@ -173,4 +201,53 @@ func testDailyAgrees(t *testing.T, s store.Store) {
 	if heat.Clicks == 0 {
 		t.Fatal("no clicks were rolled up")
 	}
+}
+
+// testCohortsAnyOrder checks that the weekly cohorts do not depend on the
+// order visits arrive in: history loaded backwards gives the same table.
+func testCohortsAnyOrder(t *testing.T, s store.Store) {
+	org, _ := seedOrg(t, s)
+	forward, backward := seedProject(t, s, org.ID, "forward"), seedProject(t, s, org.ID, "backward")
+	rnd := rand.New(rand.NewPCG(3, 5))
+	type visit struct {
+		visitor string
+		at      int64
+	}
+	var visits []visit
+	for i := range 400 {
+		visits = append(visits, visit{fmt.Sprintf("v%d", rnd.IntN(90)), base + int64(rnd.IntN(42))*day + int64(i)})
+	}
+	load := func(p store.Project, order []visit) {
+		for i, v := range order {
+			apply(t, s, hit(p, fmt.Sprintf("%s-%d-%d", p.ID, v.at, i), v.visitor, v.at, pageEv(0, "/")))
+		}
+	}
+	sorted := append([]visit(nil), visits...)
+	for i := range sorted {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].at < sorted[i].at {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	reversed := append([]visit(nil), sorted...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	load(forward, sorted)
+	load(backward, reversed)
+	now := base + 42*day
+	a, err := s.Retention(ctx, store.RetentionQuery{ProjectID: forward.ID, Now: now, Weeks: 7})
+	must(t, err)
+	b, err := s.Retention(ctx, store.RetentionQuery{ProjectID: backward.ID, Now: now, Weeks: 7})
+	must(t, err)
+	eq(t, "cohorts", fmt.Sprint(b.Cohorts), fmt.Sprint(a.Cohorts))
+	total := 0
+	for _, c := range a.Cohorts {
+		total += c.Size
+		if len(c.Active) > 1 && c.Active[0] != c.Size {
+			t.Fatalf("a cohort is all there in its own week: %+v", c)
+		}
+	}
+	eq(t, "everyone is in one cohort", total, 90)
 }

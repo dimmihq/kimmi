@@ -206,14 +206,14 @@ func (s *Settings) normalize() {
 		g := &s.Analytics.Goals[i]
 		g.Name, g.Value = strings.TrimSpace(g.Name), strings.TrimSpace(g.Value)
 		if g.ID == "" {
-			g.ID = newID()
+			g.ID = NewID()
 		}
 	}
 	for i := range s.Analytics.Funnels {
 		f := &s.Analytics.Funnels[i]
 		f.Name = strings.TrimSpace(f.Name)
 		if f.ID == "" {
-			f.ID = newID()
+			f.ID = NewID()
 		}
 		if f.Steps == nil {
 			f.Steps = []Step{}
@@ -228,8 +228,8 @@ func (s *Settings) normalize() {
 	}
 }
 
-// newID names a goal or funnel: 8 random hex digits.
-func newID() string {
+// NewID names a goal or funnel: 8 random hex digits.
+func NewID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)

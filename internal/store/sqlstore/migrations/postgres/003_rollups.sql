@@ -51,3 +51,38 @@ CREATE TABLE heat_daily (
   n INTEGER NOT NULL,
   PRIMARY KEY (project_id, day, path, device, x, y)
 );
+
+CREATE TABLE funnel_daily (
+  project_id TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  funnel_id TEXT NOT NULL,
+  step INTEGER NOT NULL,
+  visits INTEGER NOT NULL,
+  PRIMARY KEY (project_id, day, funnel_id, step)
+);
+
+CREATE TABLE funnel_visits (
+  visit_id TEXT NOT NULL,
+  funnel_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  step INTEGER NOT NULL,
+  PRIMARY KEY (visit_id, funnel_id)
+);
+CREATE INDEX funnel_visits_step ON funnel_visits(project_id, funnel_id, step, day);
+
+CREATE TABLE known_visitors (
+  project_id TEXT NOT NULL,
+  visitor_key TEXT NOT NULL,
+  first_week INTEGER NOT NULL,
+  weeks TEXT NOT NULL,
+  PRIMARY KEY (project_id, visitor_key)
+);
+
+CREATE TABLE cohort_weekly (
+  project_id TEXT NOT NULL,
+  cohort INTEGER NOT NULL,
+  week INTEGER NOT NULL,
+  visitors INTEGER NOT NULL,
+  PRIMARY KEY (project_id, cohort, week)
+);

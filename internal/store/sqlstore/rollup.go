@@ -42,13 +42,22 @@ const (
 	// dimReturning has one row a day: the visits by someone seen before,
 	// and who made them.
 	dimReturning = "returning"
+	// dimKnown has one row a day: the visitors with an identity that lasts
+	// (not a cookieless hash), for the counts of active people.
+	dimKnown = "known"
 )
+
+func newKnownSketch() *hll.Sketch { return hll.New(sketchPrecision(dimKnown)) }
+
+func unmarshalKnown(raw []byte) (*hll.Sketch, error) {
+	return hll.Unmarshal(raw, sketchPrecision(dimKnown))
+}
 
 // sketchPrecision is how exact a row's distinct count is once it holds more
 // visitors than are kept one by one: 0.8% for the totals (up to 2,048 exact),
 // 3.3% for a breakdown row (up to 128 exact).
 func sketchPrecision(dim string) uint8 {
-	if dim == dimAll || dim == dimReturning {
+	if dim == dimAll || dim == dimReturning || dim == dimKnown {
 		return 14
 	}
 	return 10
@@ -96,9 +105,15 @@ type heatKey struct {
 }
 
 type daily struct {
-	stats  map[statKey]*statDelta
-	events map[eventKey]*eventDelta
-	heat   map[heatKey]int
+	stats   map[statKey]*statDelta
+	events  map[eventKey]*eventDelta
+	heat    map[heatKey]int
+	funnels map[funnelKey]int
+	reached []funnelVisit
+	known   []knownVisit
+	// recount says some days are being counted again from their visits:
+	// the weekly cohorts are kept per visitor and are left alone.
+	recount bool
 }
 
 func (d *daily) stat(k statKey) *statDelta {
@@ -178,7 +193,7 @@ func (c *countedSet) first(kind, name, path string) bool {
 // rollUp works out what a flush adds to the daily tables, and sets each
 // visit's counted set.
 func rollUp(deltas []*visitDelta) *daily {
-	d := &daily{stats: map[statKey]*statDelta{}, events: map[eventKey]*eventDelta{}, heat: map[heatKey]int{}}
+	d := &daily{stats: map[statKey]*statDelta{}, events: map[eventKey]*eventDelta{}, heat: map[heatKey]int{}, funnels: map[funnelKey]int{}}
 	for _, v := range deltas {
 		h := v.first
 		project := h.ProjectID
@@ -226,6 +241,14 @@ func rollUp(deltas []*visitDelta) *daily {
 					s.newVisitors++
 				}
 			}
+		}
+		if isNew && strings.HasPrefix(visitor, "a:") {
+			known := d.stat(statKey{project, day, dimKnown, ""})
+			known.hashes = append(known.hashes, hash)
+			d.known = append(d.known, knownVisit{project, visitor, weekOf(day)})
+		}
+		for _, f := range h.Funnels {
+			d.advance(v, f, project, day)
 		}
 		if isNew && v.returning {
 			s := d.stat(statKey{project, day, dimReturning, ""})
@@ -370,7 +393,16 @@ func (d *DB) applyDaily(ctx context.Context, c conn, add *daily) error {
 	if err := d.applyEventsDaily(ctx, c, add.events); err != nil {
 		return err
 	}
-	return applyHeat(ctx, c, add.heat)
+	if err := applyHeat(ctx, c, add.heat); err != nil {
+		return err
+	}
+	if err := applyFunnels(ctx, c, add); err != nil {
+		return err
+	}
+	if add.recount {
+		return nil
+	}
+	return applyCohorts(ctx, c, add.known)
 }
 
 func (d *DB) applyStats(ctx context.Context, c conn, stats map[statKey]*statDelta) error {
@@ -532,8 +564,15 @@ func applyHeat(ctx context.Context, c conn, heat map[heatKey]int) error {
 // events: after a visitor was erased, the sums must no longer include them.
 // It reads a day's visits a few hundred at a time.
 func (d *DB) rebuildDaily(ctx context.Context, c conn, projectID string, days []int64) error {
+	if len(days) == 0 {
+		return nil
+	}
+	funnels, err := projectFunnels(ctx, c, projectID)
+	if err != nil {
+		return err
+	}
 	for _, day := range days {
-		for _, table := range []string{"stats_daily", "events_daily", "heat_daily"} {
+		for _, table := range []string{"stats_daily", "events_daily", "heat_daily", "funnel_daily", "funnel_visits"} {
 			if _, err := c.exec(ctx, "DELETE FROM "+table+" WHERE project_id = ? AND day = ?", projectID, day); err != nil {
 				return fmt.Errorf("rebuild day: %w", err)
 			}
@@ -556,7 +595,7 @@ func (d *DB) rebuildDaily(ctx context.Context, c conn, projectID string, days []
 					rows.Close()
 					return fmt.Errorf("rebuild day: %w", err)
 				}
-				h.ProjectID = projectID
+				h.ProjectID, h.Funnels = projectID, funnels
 				// The visit keeps its day: its start, moved so that it falls on it.
 				h.DayOffsetMs = day*store.DayMs - v.startedAt
 				batch = append(batch, v)
@@ -594,7 +633,9 @@ func (d *DB) rebuildDaily(ctx context.Context, c conn, projectID string, days []
 			if err := events.Close(); err != nil {
 				return fmt.Errorf("rebuild day: %w", err)
 			}
-			if err := d.applyDaily(ctx, c, rollUp(batch)); err != nil {
+			again := rollUp(batch)
+			again.recount = true
+			if err := d.applyDaily(ctx, c, again); err != nil {
 				return err
 			}
 			for _, v := range batch {

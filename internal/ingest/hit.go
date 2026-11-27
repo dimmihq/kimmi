@@ -202,7 +202,7 @@ func (h *Handler) hit(w http.ResponseWriter, r *http.Request) {
 		StartedAt: in.StartedAt, At: now.UnixMilli(), DayOffsetMs: p.DayOffsetMs(now),
 		Referrer: src.referrer, Channel: src.channel, UTMSource: src.utmSource, UTMMedium: src.utmMedium, UTMCampaign: src.utmCampaign,
 		CountryCode: geo.FromTimezone(in.Timezone).CountryCode, Device: agent.Device, Browser: agent.Browser, OS: agent.OS,
-		Language: cut(in.Language, 20), ViewportW: in.Viewport.W, Release: cut(in.Release, 100),
+		Language: cut(in.Language, 20), ViewportW: in.Viewport.W, Release: cut(in.Release, 100), Funnels: p.Funnels,
 		Events: make([]store.Event, 0, len(in.Events))}
 	for _, e := range in.Events {
 		if ev, ok := event(e, out.At); ok {
