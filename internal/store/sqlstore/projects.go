@@ -111,6 +111,9 @@ func (d *DB) DeleteProject(ctx context.Context, orgID, id string, at int64) erro
 		if _, err := c.exec(ctx, "DELETE FROM blocks WHERE project_id = ?", id); err != nil {
 			return err
 		}
+		if err := deleteProjectAnalytics(ctx, c, id); err != nil {
+			return err
+		}
 		_, err := c.exec(ctx, "DELETE FROM project_members WHERE project_id = ?", id)
 		return err
 	})

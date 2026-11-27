@@ -118,6 +118,8 @@ type Store interface {
 	// MaintainPartitions creates partitions ahead of time (PostgreSQL only).
 	MaintainPartitions(ctx context.Context, now int64) error
 	StorageReport(ctx context.Context, projectIDs []string, now int64) (StorageReport, error)
+
+	Analytics
 }
 
 // Role names, from most to least powerful.
@@ -351,6 +353,30 @@ type RecordingQuery struct {
 	Rage      bool
 	Errors    bool
 	VisitorID string
+	// Sort is "" (newest first) or "score": the recordings most worth
+	// watching first, by errors, rage and dead clicks, pages and activity.
+	Sort string
+	// The filters below match one value exactly. Referrer, Channel,
+	// UTMSource, UTMCampaign and Language are read from the recording's
+	// visit; Referrer "Direct" matches recordings without one.
+	Entry       string
+	Exit        string
+	Path        string // a path the recording visited
+	Referrer    string
+	Channel     string
+	UTMSource   string
+	UTMCampaign string
+	Country     string // country code
+	Browser     string
+	OS          string
+	Language    string
+	Release     string
+	// EventKind and EventName match recordings whose visit has such an
+	// event (an error fingerprint, a rage-clicked selector, a tracked
+	// event); EventPath narrows it to one page.
+	EventKind string
+	EventName string
+	EventPath string
 	Page      int
 	Limit     int
 }

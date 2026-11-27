@@ -25,6 +25,16 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 	t.Run("visitors", func(t *testing.T) { testVisitors(t, open(t)) })
 	t.Run("visitors by external id prefix", func(t *testing.T) { testVisitorPrefix(t, open(t)) })
 	t.Run("worker", func(t *testing.T) { testWorker(t, open(t)) })
+	t.Run("hits", func(t *testing.T) { testHits(t, open(t)) })
+	t.Run("traffic", func(t *testing.T) { testTraffic(t, open(t)) })
+	t.Run("goals and funnels", func(t *testing.T) { testGoals(t, open(t)) })
+	t.Run("errors and friction", func(t *testing.T) { testErrors(t, open(t)) })
+	t.Run("heatmap", func(t *testing.T) { testHeatmap(t, open(t)) })
+	t.Run("retention", func(t *testing.T) { testRetention(t, open(t)) })
+	t.Run("releases, accounts and recording filters", func(t *testing.T) { testInsights(t, open(t)) })
+	t.Run("day salt", func(t *testing.T) { testDaySalt(t, open(t)) })
+	t.Run("notes, shares, feedback and state", func(t *testing.T) { testAttachments(t, open(t)) })
+	t.Run("analytics deletes", func(t *testing.T) { testAnalyticsDeletes(t, open(t)) })
 }
 
 func must(t *testing.T, err error) {

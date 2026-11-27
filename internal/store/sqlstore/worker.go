@@ -178,8 +178,10 @@ func (d *DB) PurgeDeleted(ctx context.Context, now int64) (int, error) {
 		if err != nil {
 			return err
 		}
-		n, err = res.RowsAffected()
-		return err
+		if n, err = res.RowsAffected(); err != nil {
+			return err
+		}
+		return deleteOrphans(ctx, c)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("purge deleted sessions: %w", err)

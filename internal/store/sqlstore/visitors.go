@@ -143,6 +143,13 @@ func scanIDs(rows *sql.Rows) ([]string, error) {
 
 func (d *DB) DeleteVisitor(ctx context.Context, projectID, id string, at int64) error {
 	err := d.tx(ctx, func(c conn) error {
+		var anonymous string
+		if err := c.row(ctx, "SELECT anonymous_id FROM visitors WHERE id = ? AND project_id = ?", id, projectID).Scan(&anonymous); err != nil {
+			return notFound(err)
+		}
+		if err := deleteVisitorAnalytics(ctx, c, projectID, id, anonymous); err != nil {
+			return err
+		}
 		if err := mustAffect(c.exec(ctx, "DELETE FROM visitors WHERE id = ? AND project_id = ?", id, projectID)); err != nil {
 			return err
 		}

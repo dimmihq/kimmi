@@ -118,6 +118,46 @@ func (d *DB) ListRecordings(ctx context.Context, q store.RecordingQuery) (store.
 	if q.VisitorID != "" {
 		f.add("s.visitor_id = ?", q.VisitorID)
 	}
+	for _, c := range []struct{ col, val string }{
+		{"entry_path", q.Entry}, {"exit_path", q.Exit}, {"country_code", q.Country},
+		{"browser", q.Browser}, {"os", q.OS}, {"release", q.Release},
+	} {
+		if c.val != "" {
+			f.add("s."+c.col+" = ?", c.val)
+		}
+	}
+	if q.Path != "" {
+		f.add("EXISTS (SELECT 1 FROM "+d.eachURL()+" WHERE u.value = ?)", q.Path)
+	}
+	// What a recording does not keep itself is read from its visit.
+	var visit filter
+	if q.Referrer == "Direct" {
+		visit.add("vi.referrer = ''")
+	} else if q.Referrer != "" {
+		visit.add("vi.referrer = ?", q.Referrer)
+	}
+	for _, c := range []struct{ col, val string }{
+		{"channel", q.Channel}, {"utm_source", q.UTMSource}, {"utm_campaign", q.UTMCampaign}, {"language", q.Language},
+	} {
+		if c.val != "" {
+			visit.add("vi."+c.col+" = ?", c.val)
+		}
+	}
+	if len(visit.where) > 0 {
+		f.add("EXISTS (SELECT 1 FROM visits vi WHERE vi.id = s.id AND "+strings.Join(visit.where, " AND ")+")", visit.args...)
+	}
+	if q.EventKind != "" {
+		event := filter{}
+		event.add("e.kind = ?", q.EventKind)
+		if q.EventName != "" {
+			event.add("e.name = ?", q.EventName)
+		}
+		if q.EventPath != "" {
+			event.add("e.path = ?", q.EventPath)
+		}
+		f.add("EXISTS (SELECT 1 FROM events e WHERE e.visit_id = s.id AND e.project_id = s.project_id AND "+
+			strings.Join(event.where, " AND ")+")", event.args...)
+	}
 
 	var page store.RecordingPage
 	err := d.r.row(ctx, `SELECT COUNT(*),
@@ -146,7 +186,11 @@ func (d *DB) ListRecordings(ctx context.Context, q store.RecordingQuery) (store.
 		limit = 25
 	}
 	args := append(f.args, limit, max(q.Page, 0)*limit)
-	page.Items, err = d.recordings(ctx, recordingSelect+f.sql()+" ORDER BY s.started_at DESC, s.id DESC LIMIT ? OFFSET ?", args...)
+	order := "s.started_at DESC, s.id DESC"
+	if q.Sort == "score" {
+		order = "(s.errors * 5 + s.rage_clicks * 4 + s.dead_clicks * 2 + " + d.least() + "(s.pages, 10) + s.active_ms / 60000) DESC, " + order
+	}
+	page.Items, err = d.recordings(ctx, recordingSelect+f.sql()+" ORDER BY "+order+" LIMIT ? OFFSET ?", args...)
 	if err != nil {
 		return page, fmt.Errorf("list recordings: %w", err)
 	}
