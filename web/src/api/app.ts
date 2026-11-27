@@ -100,8 +100,9 @@ const sameProject =
   <T>(previous: T | undefined, query: Query<T, Error, T, readonly unknown[]> | undefined) =>
     query?.queryKey[1] === projectId ? previous : undefined;
 
-export const visitorLabel = (visitor: Pick<Visitor, 'name' | 'email'>) =>
-  visitor.name ?? visitor.email ?? 'Anonymous visitor';
+/** Who a visitor is, from the most to the least telling thing known about them. */
+export const visitorLabel = (visitor: Pick<Visitor, 'name' | 'email' | 'externalId'>) =>
+  visitor.name ?? visitor.email ?? (visitor.externalId ? `User ${visitor.externalId}` : 'Anonymous visitor');
 
 export const isNotFound = (error: unknown) => error instanceof ApiError && error.status === 404;
 

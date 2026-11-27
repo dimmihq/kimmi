@@ -264,7 +264,7 @@ export function Recordings() {
                         entry.seen ? 'text-fg-secondary' : 'font-semibold text-fg',
                       )}
                     >
-                      {who.name ?? 'Anonymous visitor'}
+                      {visitorLabel(who)}
                     </span>
                     <span className="block truncate text-hint text-fg-meta">
                       {who.city}, {who.country}

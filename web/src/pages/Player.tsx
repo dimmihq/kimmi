@@ -544,7 +544,7 @@ function PlayerView({ project, entry }: { project: Project; entry: RecordingDeta
               to={`${base}/visitors/${who.id}`}
               className="truncate text-card-title text-fg hover:underline"
             >
-              {who.name ?? 'Anonymous visitor'}
+              {visitorLabel(who)}
             </Link>
             {live ? (
               <Tag tone="brand" dot>
