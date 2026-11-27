@@ -12,7 +12,7 @@ LOCAL_S3 := http://localhost:28333
 .env:
 	cp .env.example .env
 
-.PHONY: up down deps build web sdk server dev dev-web test loadtest clean
+.PHONY: up down deps build web sdk server dev dev-web test loadtest seed clean
 
 up: ## Build and start everything in Docker
 	docker compose up --build -d
@@ -52,6 +52,9 @@ test:
 
 loadtest: server ## make loadtest KEY=km_pub_... [SESSIONS=2000 CONCURRENCY=200]
 	bin/kimmi loadgen --host $(KIMMI_PUBLIC_URL) --key $(KEY) --sessions $(or $(SESSIONS),2000) --concurrency $(or $(CONCURRENCY),200)
+
+seed: server ## make seed KEY=km_pub_... [VISITS=150000 RECORDED=15000 DAYS=60]; the server needs KIMMI_TEST_HOOKS=1 and KIMMI_INGEST_RATE=0
+	bin/kimmi seed --host $(KIMMI_PUBLIC_URL) --key $(KEY) --visits $(or $(VISITS),150000) --recorded $(or $(RECORDED),15000) --days $(or $(DAYS),60)
 
 clean:
 	rm -rf bin data web/dist sdk/browser/dist

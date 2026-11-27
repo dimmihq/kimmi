@@ -177,8 +177,18 @@ func (h *Handler) hit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	if h.TrustClock && in.At > 0 {
-		now = time.UnixMilli(in.At)
+	if h.TrustClock {
+		// A browser on a moved clock (demo recordings of past days) says
+		// when through its events.
+		at := in.At
+		for _, e := range in.Events {
+			if at == 0 || (in.At == 0 && e.T > at) {
+				at = max(at, e.T)
+			}
+		}
+		if at > 0 && at < now.UnixMilli() {
+			now = time.UnixMilli(at)
+		}
 	}
 	key, cookieless, err := h.visitorKey(r, p, in.AnonymousID, now)
 	if err != nil {

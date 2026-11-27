@@ -29,6 +29,7 @@ const usage = `kimmi: self-hosted session replay
 Usage:
   kimmi serve      run the server (configured with KIMMI_* environment variables)
   kimmi loadgen    send synthetic recordings to a server (kimmi loadgen -h for flags)
+  kimmi seed       fill a server with a believable history through its ingest endpoints (kimmi seed -h)
   kimmi admin      manage the instance from the database (kimmi admin -h)
   kimmi version    print the version
 `
@@ -44,6 +45,8 @@ func main() {
 		err = serve()
 	case "loadgen":
 		err = runLoadgen(os.Args[2:])
+	case "seed":
+		err = runSeed(os.Args[2:])
 	case "admin":
 		err = runAdmin(os.Args[2:], os.Stdout)
 	case "version", "--version", "-v":
@@ -98,6 +101,36 @@ func runLoadgen(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	report, err := loadgen.Run(ctx, o, os.Stdout)
+	if err != nil {
+		return err
+	}
+	fmt.Print(report)
+	return nil
+}
+
+func runSeed(args []string) error {
+	fs := flag.NewFlagSet("seed", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Fills a running kimmi with a history of visits to the example shop, sent through /i/v1/hit, /i/v1/batch and /i/v1/feedback.")
+		fmt.Fprintln(fs.Output(), "The server must run with KIMMI_TEST_HOOKS=1 (a hit may say when it happened) and KIMMI_INGEST_RATE=0.")
+		fs.PrintDefaults()
+	}
+	var o loadgen.SeedOptions
+	fs.StringVar(&o.Host, "host", "http://localhost:8700", "server address")
+	fs.StringVar(&o.Key, "key", "", "project public key (km_pub_...)")
+	fs.IntVar(&o.Days, "days", 60, "days of history, ending now")
+	fs.IntVar(&o.Visits, "visits", 150000, "visits to send")
+	fs.IntVar(&o.Recorded, "recorded", 15000, "visits that also get a recording")
+	fs.IntVar(&o.Concurrency, "concurrency", 64, "visits sending at once")
+	fs.Uint64Var(&o.Seed, "seed", 1, "seed of the generator: the same seed gives the same history")
+	fs.BoolVar(&o.Analytics, "analytics", true, "send analytics hits and feedback; false sends recordings only")
+	_ = fs.Parse(args) // ExitOnError: Parse exits by itself
+	if o.Key == "" {
+		return errors.New("seed: --key is required")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report, err := loadgen.Seed(ctx, o, os.Stdout)
 	if err != nil {
 		return err
 	}
