@@ -98,6 +98,9 @@ type Store interface {
 	VisitorDetail(ctx context.Context, projectID, id string, activityFrom, dayOffsetMs int64) (VisitorStats, []DayCount, error)
 	// FindVisitors matches a visitor id, external id or email exactly.
 	FindVisitors(ctx context.Context, projectID, query string) ([]string, error)
+	// FindVisitorsByExternalIDPrefix matches visitors whose external id
+	// starts with prefix, compared literally and case-sensitively.
+	FindVisitorsByExternalIDPrefix(ctx context.Context, projectID, prefix string) ([]string, error)
 	// DeleteVisitor removes the visitor and soft-deletes their recordings.
 	DeleteVisitor(ctx context.Context, projectID, id string, at int64) error
 

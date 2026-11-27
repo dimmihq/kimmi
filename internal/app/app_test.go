@@ -126,6 +126,7 @@ type obj = map[string]any
 type session struct {
 	id      string
 	anon    string
+	ext     string // identifies the visitor with this external id
 	batches [][]obj
 }
 
@@ -169,6 +170,9 @@ func (s session) body(t *testing.T, seq int, start int64) []byte {
 		Release: "v1.2.3", Counts: envelope.Counts{Events: len(evs), Clicks: 1, Pageviews: 1}, Paths: []string{fmt.Sprintf("/page-%d", seq)}}
 	if s.anon == "anon-identified" {
 		m.Identity = &envelope.Identity{ID: "user-42", Email: "ada@example.com", Name: "Ada"}
+	}
+	if s.ext != "" {
+		m.Identity = &envelope.Identity{ID: s.ext}
 	}
 	b, err := envelope.Encode(m, gz.Bytes())
 	if err != nil {

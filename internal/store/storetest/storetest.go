@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ func Run(t *testing.T, open func(t *testing.T) store.Store) {
 	t.Run("recordings", func(t *testing.T) { testRecordings(t, open(t)) })
 	t.Run("aggregates", func(t *testing.T) { testAggregates(t, open(t)) })
 	t.Run("visitors", func(t *testing.T) { testVisitors(t, open(t)) })
+	t.Run("visitors by external id prefix", func(t *testing.T) { testVisitorPrefix(t, open(t)) })
 	t.Run("worker", func(t *testing.T) { testWorker(t, open(t)) })
 }
 
@@ -476,6 +478,42 @@ func testVisitors(t *testing.T, s store.Store) {
 	if err := s.DeleteVisitor(ctx, p.ID, ann.ID, now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("delete missing visitor: %v", err)
 	}
+}
+
+func testVisitorPrefix(t *testing.T, s store.Store) {
+	org, _ := seedOrg(t, s)
+	p := seedProject(t, s, org.ID, "shop")
+	other := seedProject(t, s, org.ID, "other")
+	now := time.Now().UnixMilli()
+	var blocks []store.IngestBlock
+	for i, ext := range []string{"ws_1:u1", "ws_1:u2", "ws_12:u1", "WS_1:u3", "wsx1:u4", "ws%1:u5", "ws_1"} {
+		b := batch(p, store.NewID(), fmt.Sprintf("anon-%d", i), 0, now)
+		b.ExternalID = ext
+		blocks = append(blocks, b)
+	}
+	o := batch(other, store.NewID(), "anon-other", 0, now)
+	o.ExternalID = "ws_1:u1"
+	blocks = append(blocks, o)
+	must(t, s.ApplyFlush(ctx, blocks, now))
+
+	ids, err := s.FindVisitorsByExternalIDPrefix(ctx, p.ID, "ws_1:")
+	must(t, err)
+	eq(t, "prefix matches", len(ids), 2)
+	for _, id := range ids {
+		v, err := s.GetVisitor(ctx, p.ID, id)
+		must(t, err)
+		if v.ExternalID == nil || !strings.HasPrefix(*v.ExternalID, "ws_1:") {
+			t.Fatalf("prefix matched %v", v.ExternalID)
+		}
+	}
+	ids, _ = s.FindVisitorsByExternalIDPrefix(ctx, p.ID, "ws%")
+	eq(t, "percent is literal", len(ids), 1)
+	ids, _ = s.FindVisitorsByExternalIDPrefix(ctx, p.ID, "w_")
+	eq(t, "underscore is literal", len(ids), 0)
+	ids, _ = s.FindVisitorsByExternalIDPrefix(ctx, p.ID, "ws_12:")
+	eq(t, "longer prefix", len(ids), 1)
+	ids, _ = s.FindVisitorsByExternalIDPrefix(ctx, other.ID, "ws_1:")
+	eq(t, "other project", len(ids), 1)
 }
 
 func testWorker(t *testing.T, s store.Store) {

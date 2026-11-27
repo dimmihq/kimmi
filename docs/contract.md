@@ -287,7 +287,7 @@ Live = { visitors, activeLast5m, pages: { path, count }[], countries: { code, na
 | `GET /projects/{id}/visitors?q=&kind=all|identified|anonymous&sort=lastSeen|sessions|firstSeen&page=&limit=` | `{ items: Visitor[], total, counts: { all, identified, anonymous } }` |
 | `GET /projects/{id}/visitors/{vid}` | `{ visitor: Visitor, stats: { sessions, totalDurationMs, rageClicks, errors }, activity: { date, count }[] /* last 84 days */, recordings: Recording[] }` |
 | `DELETE /projects/{id}/visitors/{vid}` | 204, removes the visitor and all their recordings |
-| `POST /projects/{id}/visitors/erase` body `{ query }` (visitor id, external id or email) | `{ deleted: number }` |
+| `POST /projects/{id}/visitors/erase` body `{ query }` (visitor id, external id or email) or `{ externalIdPrefix }` | `{ deleted: number }` |
 
 ### Instance
 
@@ -309,7 +309,7 @@ Live = { visitors, activeLast5m, pages: { path, count }[], countries: { code, na
 - Daily buckets (`stats.series`, `Overview.days`, visitor `activity`) follow the project's `timezone`.
 - `Live.visitors` counts visitors with data in `KIMMI_LIVE_WINDOW`; `activeLast5m` in the last 5 minutes.
 - `GET /storage` covers the projects the caller can see. `ages` labels: `Last 7 days`, `8–30 days`, `31–90 days`, `91–365 days`, `Older than a year`; `expiringBytes` passes retention within 7 days; `nextCleanupFreesBytes` is past retention or already deleted. `POST /storage/cleanup` returns `freedBytes` as the object bytes actually removed (a packed sealed object goes once no recording points to it) and `deleted` as recordings removed.
-- `POST /visitors/erase` returns the number of visitors deleted.
+- `POST /visitors/erase` returns the number of visitors deleted. With `externalIdPrefix` it erases every visitor of the project whose external id starts with it, compared literally and case-sensitively (`%` and `_` are not wildcards), with their recordings, as `query` does. The prefix must be at least 3 characters and end with `:`, else `400` with `fields.externalIdPrefix`; sending both `query` and `externalIdPrefix` is also a `400`. Like any write it needs a member or above, and a `write` token.
 - `events?after=n` on a sealed session returns the chunks whose `last_seq > n`; a chunk holding several blocks is sent whole.
 - A batch that arrives for a sealed session reopens it; the next sealing run packs the old chunks and the new blocks together.
 

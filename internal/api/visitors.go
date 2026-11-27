@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dimmihq/kimmi/internal/store"
 )
@@ -51,18 +52,37 @@ func (a *API) deleteVisitor(w http.ResponseWriter, r *http.Request, _ *principal
 }
 
 // eraseVisitors deletes every visitor matching an id, external id or email,
-// with their recordings, and returns how many visitors went.
+// or every visitor whose external id starts with externalIdPrefix, with
+// their recordings, and returns how many visitors went.
 func (a *API) eraseVisitors(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {
-	var in struct{ Query string }
+	var in struct {
+		Query            string
+		ExternalIDPrefix *string `json:"externalIdPrefix"`
+	}
 	if err := decode(r, &in); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	if in.Query = strings.TrimSpace(in.Query); in.Query == "" {
+	in.Query = strings.TrimSpace(in.Query)
+	var ids []string
+	var err error
+	switch {
+	case in.ExternalIDPrefix != nil && in.Query != "":
+		a.fail(w, r, invalid("Give a query or an external id prefix, not both", map[string]string{"externalIdPrefix": "Leave out query"}))
+		return
+	case in.ExternalIDPrefix != nil:
+		prefix := *in.ExternalIDPrefix
+		if utf8.RuneCountInString(prefix) < 3 || !strings.HasSuffix(prefix, ":") {
+			a.fail(w, r, invalid("Check the external id prefix", map[string]string{"externalIdPrefix": "At least 3 characters, ending with :"}))
+			return
+		}
+		ids, err = a.Store.FindVisitorsByExternalIDPrefix(r.Context(), proj.ID, prefix)
+	case in.Query == "":
 		a.fail(w, r, invalid("Give a visitor id, external id or email", map[string]string{"query": "Required"}))
 		return
+	default:
+		ids, err = a.Store.FindVisitors(r.Context(), proj.ID, in.Query)
 	}
-	ids, err := a.Store.FindVisitors(r.Context(), proj.ID, in.Query)
 	if err != nil {
 		a.fail(w, r, err)
 		return

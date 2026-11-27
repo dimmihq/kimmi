@@ -2,7 +2,10 @@ package sqlstore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/dimmihq/kimmi/internal/store"
 )
@@ -109,6 +112,23 @@ func (d *DB) FindVisitors(ctx context.Context, projectID, query string) ([]strin
 	if err != nil {
 		return nil, fmt.Errorf("find visitors: %w", err)
 	}
+	return scanIDs(rows)
+}
+
+// FindVisitorsByExternalIDPrefix escapes the prefix for LIKE, so % and _
+// are literal, and compares the leading characters again because SQLite's
+// LIKE ignores case.
+func (d *DB) FindVisitorsByExternalIDPrefix(ctx context.Context, projectID, prefix string) ([]string, error) {
+	like := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(prefix) + "%"
+	rows, err := d.r.query(ctx, `SELECT id FROM visitors WHERE project_id = ? AND external_id LIKE ? ESCAPE '\'
+		AND SUBSTR(external_id, 1, ?) = ?`, projectID, like, utf8.RuneCountInString(prefix), prefix)
+	if err != nil {
+		return nil, fmt.Errorf("find visitors: %w", err)
+	}
+	return scanIDs(rows)
+}
+
+func scanIDs(rows *sql.Rows) ([]string, error) {
 	defer rows.Close()
 	var ids []string
 	for rows.Next() {
