@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+**/.next
+.git
+data
+bin
+.env
+examples
+!internal/webui/dist

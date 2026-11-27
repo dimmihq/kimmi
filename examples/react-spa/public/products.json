@@ -1,0 +1,8 @@
+[
+  { "id": "linen-throw", "name": "Linen throw", "price": 89, "color": "#d8c7a8", "category": "Home", "description": "Stonewashed Belgian linen, heavy enough for winter evenings and soft from the first use." },
+  { "id": "oak-tray", "name": "Oak serving tray", "price": 54, "color": "#b98b5e", "category": "Kitchen", "description": "Solid white oak with routed handles. Finished with food-safe hardwax oil." },
+  { "id": "stoneware-mug", "name": "Stoneware mug", "price": 24, "color": "#8fa3a6", "category": "Kitchen", "description": "Wheel-thrown in small batches, glazed inside and out. Holds 350 ml." },
+  { "id": "wool-slippers", "name": "Wool slippers", "price": 62, "color": "#7d6b8a", "category": "Wear", "description": "Felted merino with a natural rubber sole. Warm, quiet on wooden floors." },
+  { "id": "brass-lamp", "name": "Brass desk lamp", "price": 148, "color": "#c9a24a", "category": "Home", "description": "Spun brass shade on an adjustable arm. Ages to a warm patina." },
+  { "id": "canvas-tote", "name": "Waxed canvas tote", "price": 45, "color": "#5f7155", "category": "Wear", "description": "Water-resistant waxed cotton with leather handles and an inner pocket." }
+]

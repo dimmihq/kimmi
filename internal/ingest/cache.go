@@ -1,0 +1,134 @@
+package ingest
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dimmihq/kimmi/internal/settings"
+	"github.com/dimmihq/kimmi/internal/store"
+)
+
+// Project is what the ingest path knows about a public key.
+type Project struct {
+	ID      string
+	OrgID   string
+	Origins []string
+	// Config is the ready-to-send /i/v1/config body.
+	Config []byte
+}
+
+// ProjectLister is the one store query the cache needs.
+type ProjectLister interface {
+	ListAllProjects(ctx context.Context) ([]store.Project, error)
+}
+
+// Cache maps public keys to projects so ingest never touches the database
+// per request. It reloads every few seconds, and at once when this process
+// changes a project.
+type Cache struct {
+	store ProjectLister
+	log   *slog.Logger
+
+	mu    sync.RWMutex
+	byKey map[string]*Project
+}
+
+// NewCache returns an empty cache; call Load before serving.
+func NewCache(s ProjectLister, log *slog.Logger) *Cache {
+	return &Cache{store: s, log: log, byKey: map[string]*Project{}}
+}
+
+// Lookup finds the live project with this public key.
+func (c *Cache) Lookup(key string) (*Project, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	p, ok := c.byKey[key]
+	return p, ok
+}
+
+// Load replaces the cache with the projects in the database.
+func (c *Cache) Load(ctx context.Context) error {
+	projects, err := c.store.ListAllProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("load project cache: %w", err)
+	}
+	next := make(map[string]*Project, len(projects))
+	for _, p := range projects {
+		s := settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred)
+		next[p.PublicKey] = &Project{ID: p.ID, OrgID: p.OrgID, Origins: normalizeOrigins(p.Origins), Config: configBody(true, s)}
+	}
+	c.mu.Lock()
+	c.byKey = next
+	c.mu.Unlock()
+	return nil
+}
+
+// Invalidate reloads at once; the API calls it after changing a project.
+func (c *Cache) Invalidate(ctx context.Context) {
+	if err := c.Load(ctx); err != nil {
+		c.log.Error("reload project cache", "err", err)
+	}
+}
+
+// Run reloads the cache every interval until ctx ends.
+func (c *Cache) Run(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.Invalidate(ctx)
+		}
+	}
+}
+
+type configResponse struct {
+	Recording  bool             `json:"recording"`
+	SampleRate int              `json:"sampleRate"`
+	Privacy    settings.Privacy `json:"privacy"`
+	Capture    settings.Capture `json:"capture"`
+}
+
+func configBody(recording bool, s settings.Settings) []byte {
+	b, _ := json.Marshal(configResponse{Recording: recording, SampleRate: s.Capture.SampleRate, Privacy: s.Privacy, Capture: s.Capture})
+	return b
+}
+
+// disabledConfig is sent for unknown or deleted keys.
+var disabledConfig = configBody(false, settings.Default())
+
+func normalizeOrigins(origins []string) []string {
+	out := make([]string, 0, len(origins))
+	for _, o := range origins {
+		if o = strings.TrimRight(strings.ToLower(strings.TrimSpace(o)), "/"); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// Allows reports whether a request from origin may send data. An empty list
+// allows everyone; "https://*.acme.dev" allows every subdomain over https.
+func (p *Project) Allows(origin string) bool {
+	if len(p.Origins) == 0 {
+		return true
+	}
+	origin = strings.ToLower(origin)
+	for _, o := range p.Origins {
+		if o == origin {
+			return true
+		}
+		if scheme, host, ok := strings.Cut(o, "://*."); ok && strings.HasPrefix(origin, scheme+"://") &&
+			strings.HasSuffix(origin, "."+host) {
+			return true
+		}
+	}
+	return false
+}

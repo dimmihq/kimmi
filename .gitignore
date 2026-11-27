@@ -1,0 +1,16 @@
+.DS_Store
+node_modules
+dist
+.next
+data/
+bin/
+.env
+*.local
+# The embed folder holds two committed placeholders; a build fills it.
+internal/webui/dist/*
+!internal/webui/dist/index.html
+!internal/webui/dist/kimmi.js
+.mcp.json
+test-results/
+playwright-report/
+*.tsbuildinfo

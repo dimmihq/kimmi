@@ -1,0 +1,68 @@
+# The whole stack: `docker compose up --build`, then open http://localhost:8700
+name: kimmi
+
+services:
+  kimmi:
+    build: .
+    env_file: .env
+    environment:
+      KIMMI_HTTP_ADDR: ":8700"
+      KIMMI_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      KIMMI_STORAGE: s3
+      KIMMI_S3_ENDPOINT: http://seaweedfs:8333
+    ports: ["8700:8700"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: ["25432:5432"]
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # S3-compatible storage for recordings. kimmi creates its bucket on start.
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.97
+    command: server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data -volume.max=0 -master.volumeSizeLimitMB=64
+    configs:
+      - source: s3
+        target: /etc/seaweedfs/s3.json
+    ports: ["28333:8333"]
+    volumes: [seaweedfs:/data]
+    healthcheck:
+      # SeaweedFS listens on the container address, not on localhost.
+      test: ["CMD-SHELL", "nc -z $$(hostname -i) 8333"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+configs:
+  s3:
+    content: |
+      {
+        "identities": [
+          {
+            "name": "kimmi",
+            "credentials": [
+              { "accessKey": "${KIMMI_S3_ACCESS_KEY}", "secretKey": "${KIMMI_S3_SECRET_KEY}" }
+            ],
+            "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+          }
+        ]
+      }
+
+volumes:
+  postgres:
+  seaweedfs:

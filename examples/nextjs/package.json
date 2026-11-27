@@ -1,0 +1,23 @@
+{
+  "name": "@kimmi/example-nextjs",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "next dev -p 5230",
+    "build": "next build",
+    "start": "next start -p 5230",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kimmi/browser": "workspace:*",
+    "next": "^16.4.6",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.4",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "~5.9.3"
+  }
+}
