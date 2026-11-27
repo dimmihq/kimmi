@@ -1,0 +1,10 @@
+# On top of docker-compose.yml, for `make demo` and the stack tests only. Never for production:
+# KIMMI_TEST_HOOKS lets clients say when things happened, and both rate limits are off.
+services:
+  kimmi:
+    environment:
+      KIMMI_TEST_HOOKS: "1"
+      KIMMI_INGEST_RATE: "0"
+      KIMMI_AUTH_RATE: "0"
+      KIMMI_OWNER: "${DEV_ACCOUNT_EMAIL}:${DEV_ACCOUNT_PASSWORD}"
+      KIMMI_ORG: "Fernhill"

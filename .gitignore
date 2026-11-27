@@ -14,3 +14,4 @@ internal/webui/dist/*
 test-results/
 playwright-report/
 *.tsbuildinfo
+.demo-*

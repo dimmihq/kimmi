@@ -16,6 +16,10 @@ import (
 	"github.com/dimmihq/kimmi/internal/app"
 	"github.com/dimmihq/kimmi/internal/config"
 	"github.com/dimmihq/kimmi/internal/loadgen"
+
+	// The image and many small servers have no time zone database: carry one,
+	// so a project's days follow its own time zone everywhere.
+	_ "time/tzdata"
 )
 
 // Set with -ldflags "-X main.version=... -X main.commit=...".
