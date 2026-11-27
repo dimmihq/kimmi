@@ -88,40 +88,79 @@ func named(name, empty string) string {
 	return name
 }
 
+// together runs the parts of one report side by side, a few at a time: each
+// is its own query, and the page waits for the slowest instead of the sum.
+func (d *DB) together(parts ...func() error) error {
+	limit := 3 // SQLite reads on a few connections
+	if d.pg() {
+		limit = 6
+	}
+	slots := make(chan struct{}, limit)
+	errs := make(chan error, len(parts))
+	for _, part := range parts {
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots }()
+			errs <- part()
+		}()
+	}
+	var first error
+	for range parts {
+		if err := <-errs; err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 func (d *DB) Traffic(ctx context.Context, q store.AnalyticsQuery) (store.Traffic, error) {
 	t := store.Traffic{Days: []store.TrafficDay{}, Pages: []store.PageMetric{}}
-	var err error
-	if t.Totals, err = d.trafficTotals(ctx, q, q.From, q.To); err != nil {
-		return t, fmt.Errorf("traffic totals: %w", err)
-	}
-	if t.Previous, err = d.trafficTotals(ctx, q, q.PrevFrom, q.From); err != nil {
-		return t, fmt.Errorf("traffic totals: %w", err)
-	}
-
 	first, last := (q.From+q.DayOffsetMs)/store.DayMs, (q.To-1+q.DayOffsetMs)/store.DayMs
 	index := map[int64]int{}
 	for i := first; i <= last; i++ {
 		index[i] = len(t.Days)
 		t.Days = append(t.Days, store.TrafficDay{Date: dayLabel(i)})
 	}
-	f := visitScope(q.ProjectID, q.From, q.To, q.Filter)
-	err = d.each(ctx, `SELECT (v.started_at + ?) / 86400000 AS d, COUNT(DISTINCT v.visitor_key), COUNT(*), COALESCE(SUM(v.pageviews), 0)
-		FROM visits v`+f.sql()+` GROUP BY d`, append([]any{q.DayOffsetMs}, f.args...), func(rows *sql.Rows) error {
-		var day int64
-		var td store.TrafficDay
-		if err := rows.Scan(&day, &td.Visitors, &td.Visits, &td.Pageviews); err != nil {
+	parts := []func() error{
+		func() (err error) {
+			if t.Totals, err = d.trafficTotals(ctx, q, q.From, q.To); err != nil {
+				err = fmt.Errorf("traffic totals: %w", err)
+			}
 			return err
-		}
-		if i, ok := index[day]; ok {
-			td.Date = t.Days[i].Date
-			t.Days[i] = td
-		}
-		return nil
-	})
-	if err != nil {
-		return t, fmt.Errorf("traffic days: %w", err)
+		},
+		func() (err error) {
+			if t.Previous, err = d.trafficTotals(ctx, q, q.PrevFrom, q.From); err != nil {
+				err = fmt.Errorf("traffic totals: %w", err)
+			}
+			return err
+		},
+		func() error {
+			f := visitScope(q.ProjectID, q.From, q.To, q.Filter)
+			err := d.each(ctx, `SELECT (v.started_at + ?) / 86400000 AS d, COUNT(DISTINCT v.visitor_key), COUNT(*), COALESCE(SUM(v.pageviews), 0)
+				FROM visits v`+f.sql()+` GROUP BY d`, append([]any{q.DayOffsetMs}, f.args...), func(rows *sql.Rows) error {
+				var day int64
+				var td store.TrafficDay
+				if err := rows.Scan(&day, &td.Visitors, &td.Visits, &td.Pageviews); err != nil {
+					return err
+				}
+				if i, ok := index[day]; ok {
+					td.Date = t.Days[i].Date
+					t.Days[i] = td
+				}
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("traffic days: %w", err)
+			}
+			return nil
+		},
+		func() (err error) {
+			if t.Pages, err = d.trafficPages(ctx, q); err != nil {
+				err = fmt.Errorf("traffic pages: %w", err)
+			}
+			return err
+		},
 	}
-
 	for _, b := range []struct {
 		dst        *[]store.Breakdown
 		col, empty string
@@ -132,26 +171,26 @@ func (d *DB) Traffic(ctx context.Context, q store.AnalyticsQuery) (store.Traffic
 		{&t.Languages, "language", "Unknown"},
 	} {
 		*b.dst = []store.Breakdown{}
-		col := "v." + b.col
-		err := d.each(ctx, "SELECT "+col+", COUNT(DISTINCT v.visitor_key), COUNT(*) FROM visits v"+f.sql()+
-			" GROUP BY "+col+" ORDER BY COUNT(DISTINCT v.visitor_key) DESC, COUNT(*) DESC, "+col+" LIMIT 10", f.args, func(rows *sql.Rows) error {
-			var row store.Breakdown
-			if err := rows.Scan(&row.Name, &row.Visitors, &row.Visits); err != nil {
-				return err
+		parts = append(parts, func() error {
+			f := visitScope(q.ProjectID, q.From, q.To, q.Filter)
+			col := "v." + b.col
+			err := d.each(ctx, "SELECT "+col+", COUNT(DISTINCT v.visitor_key), COUNT(*) FROM visits v"+f.sql()+
+				" GROUP BY "+col+" ORDER BY COUNT(DISTINCT v.visitor_key) DESC, COUNT(*) DESC, "+col+" LIMIT 10", f.args, func(rows *sql.Rows) error {
+				var row store.Breakdown
+				if err := rows.Scan(&row.Name, &row.Visitors, &row.Visits); err != nil {
+					return err
+				}
+				row.Name = named(row.Name, b.empty)
+				*b.dst = append(*b.dst, row)
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("traffic %s: %w", b.col, err)
 			}
-			row.Name = named(row.Name, b.empty)
-			*b.dst = append(*b.dst, row)
 			return nil
 		})
-		if err != nil {
-			return t, fmt.Errorf("traffic %s: %w", b.col, err)
-		}
 	}
-
-	if t.Pages, err = d.trafficPages(ctx, q); err != nil {
-		return t, fmt.Errorf("traffic pages: %w", err)
-	}
-	return t, nil
+	return t, d.together(parts...)
 }
 
 func (d *DB) trafficTotals(ctx context.Context, q store.AnalyticsQuery, from, to int64) (store.TrafficTotals, error) {
@@ -257,15 +296,19 @@ func stepMatches(s store.Step, kind, path, name string) bool {
 
 func (d *DB) Goals(ctx context.Context, q store.AnalyticsQuery, goals []store.Step) ([]int, error) {
 	out := make([]int, len(goals))
+	parts := make([]func() error, len(goals))
 	for i, g := range goals {
-		from, f := eventScope(q, false)
-		cond, args := stepCond(g)
-		f.add(cond, args...)
-		if err := d.r.row(ctx, "SELECT COUNT(DISTINCT e.visit_id)"+from+f.sql(), f.args...).Scan(&out[i]); err != nil {
-			return out, fmt.Errorf("goals: %w", err)
+		parts[i] = func() error {
+			from, f := eventScope(q, false)
+			cond, args := stepCond(g)
+			f.add(cond, args...)
+			if err := d.r.row(ctx, "SELECT COUNT(DISTINCT e.visit_id)"+from+f.sql(), f.args...).Scan(&out[i]); err != nil {
+				return fmt.Errorf("goals: %w", err)
+			}
+			return nil
 		}
 	}
-	return out, nil
+	return out, d.together(parts...)
 }
 
 func (d *DB) GoalSources(ctx context.Context, q store.AnalyticsQuery, goal store.Step) ([]store.NameCount, error) {

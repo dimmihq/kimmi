@@ -85,7 +85,7 @@ async function visit(page: Page, shop: string, rand: () => number, feedback: boo
     await page.getByTestId('login-password').fill(`demo-${name.length}-password`);
     await page.getByTestId('login-submit').click();
     await pause(page, rand);
-    await page.getByRole('link', { name: 'Shop' }).click();
+    await page.getByRole('link', { name: 'Shop', exact: true }).click();
     await pause(page, rand);
   }
 
@@ -112,7 +112,7 @@ async function visit(page: Page, shop: string, rand: () => number, feedback: boo
       await pause(page, rand, 300, 700);
     }
     if (i + 1 < looks) {
-      await page.getByRole('link', { name: 'Shop' }).click();
+      await page.getByRole('link', { name: 'Shop', exact: true }).click();
       await pause(page, rand);
     }
   }
