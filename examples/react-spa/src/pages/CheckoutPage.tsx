@@ -1,3 +1,4 @@
+import kimmi from '@kimmi/browser';
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { useCart } from '../cart';
@@ -18,6 +19,7 @@ export function CheckoutPage() {
       return;
     }
     console.log('Order placed', { items: count, total });
+    kimmi.track('purchase', { items: count, value: total });
     clear();
     navigate('/thanks');
   };

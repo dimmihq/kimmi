@@ -1,3 +1,4 @@
+import kimmi from '@kimmi/browser';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useCart } from '../cart';
@@ -35,7 +36,11 @@ export function ProductPage() {
         <p className="price">{formatPrice(product.price)}</p>
         <p>{product.description}</p>
         <div className="actions">
-          <button type="button" className="button primary" data-testid="add-to-cart" onClick={() => add(product)}>
+          <button type="button" className="button primary" data-testid="add-to-cart" onClick={() => {
+              add(product);
+              kimmi.track('add_to_cart', { product: product.id });
+            }}
+          >
             Add to cart
           </button>
           <button type="button" className="button" data-testid="check-stock" onClick={checkStock}>
