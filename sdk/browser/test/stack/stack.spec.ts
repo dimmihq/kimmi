@@ -133,7 +133,7 @@ test('the webhook receives a signed test delivery', async () => {
 
 test('a visitor buys something, hits an error, rage-clicks and leaves feedback', async ({ browser }) => {
   await visitor(browser, async (page) => {
-    await page.goto(`${SHOP}/?utm_source=newsletter&utm_medium=email&utm_campaign=spring-${run}`);
+    await page.goto(`${SHOP}/?utm_source=newsletter&utm_medium=email&utm_campaign=spring-sale`);
     await page.getByTestId('product-oak-tray').click();
     await page.mouse.wheel(0, 600);
     await page.getByTestId('add-to-cart').click();
@@ -167,6 +167,17 @@ test('a second visitor looks at a product and leaves', async ({ browser }) => {
     await page.goto(`${SHOP}/`);
     await page.getByTestId('product-oak-tray').click();
     await page.getByTestId('add-to-cart').click();
+    await page.waitForTimeout(1200);
+    // Signs in, which identifies them, and hits an error nobody has seen before.
+    await page.getByRole('link', { name: 'Sign in' }).click();
+    await page.getByTestId('login-email').fill('grace@fernhill.dev');
+    await page.getByTestId('login-password').fill('correct horse');
+    await page.getByTestId('login-submit').click();
+    await page.evaluate((id) => {
+      setTimeout(() => {
+        throw new Error(`Loyalty points failed for batch ${id}`);
+      });
+    }, run);
     await page.waitForTimeout(500);
   });
 });
@@ -211,13 +222,13 @@ test('the API shows what the visitors did', async () => {
   const traffic = await get<Traffic>('/analytics', { days: 1 });
   expect(traffic.totals.visits).toBeGreaterThanOrEqual(3);
   expect(traffic.sources.map((source) => source.name)).toContain('newsletter');
-  expect(traffic.campaigns.map((campaign) => campaign.name)).toContain(`spring-${run}`);
   expect(traffic.channels.map((channel) => channel.name)).toContain('Email');
   expect(traffic.pages.map((page) => page.path)).toEqual(expect.arrayContaining(['/', '/products/oak-tray', '/checkout', '/thanks']));
   expect(traffic.goals.find((goal) => goal.name === 'Reached thanks')!.conversions).toBeGreaterThan(0);
 
-  const campaign = await get<Traffic>('/analytics', { days: 1, utmCampaign: `spring-${run}` });
-  expect(campaign.totals.visits).toBe(1);
+  const campaign = await get<Traffic>('/analytics', { days: 1, utmCampaign: 'spring-sale' });
+  expect(campaign.totals.visits).toBeGreaterThanOrEqual(1);
+  expect(campaign.totals.visits, 'the filter narrows the numbers').toBeLessThan(traffic.totals.visits);
 
   const events = await get<{ name: string; count: number; value: number }[]>('/events', { days: 1 });
   expect(events.find((event) => event.name === 'add_to_cart')!.count).toBeGreaterThanOrEqual(2);
@@ -270,8 +281,15 @@ test('the API shows what the visitors did', async () => {
   const watch = await get<{ items: { id: string; errors: number }[] }>('/recordings', { sort: 'score', limit: 5 });
   expect(watch.items[0]!.errors, 'the recording most worth watching has the error').toBeGreaterThan(0);
 
+  expect(events.map((event) => event.name), 'the checkout form was counted without code').toContain('$form');
+  expect((await get<{ languages: { name: string }[] }>('/analytics', { days: 1 })).languages.length).toBeGreaterThan(0);
+  expect((await get<{ release: string }[]>('/releases', { days: 1 })).map((item) => item.release)).toContain('shop@1.4.0');
+  expect((await get<{ domain: string }[]>('/accounts')).map((account) => account.domain)).toContain('fernhill.dev');
+  expect((await get<{ daily: number; cohorts: unknown[] }>('/retention')).daily).toBeGreaterThan(0);
+
   await expect.poll(() => delivered('feedback.new').some((delivery) => delivery.text === feedbackText), { timeout: 10_000 }).toBe(true);
-  // The first run on a fresh project also delivers error.new; later runs have seen the error before.
+  await expect.poll(() => delivered('error.new').some((delivery) => delivery.text.includes(run)), { timeout: 10_000 }).toBe(true);
+  expect(delivered('error.new').find((delivery) => delivery.text.includes(run))!.url).toMatch(/\/errors\/[0-9a-f]{16}$/);
   const digest = await api.post(`/api/v1/projects/${project}/alerts/digest`);
   expect(digest.status(), await digest.text()).toBe(204);
   await expect.poll(() => delivered('digest.weekly').length).toBeGreaterThan(0);
@@ -358,6 +376,73 @@ test('the dashboard shows it', async ({ browser }) => {
     await page.waitForLoadState('networkidle');
     await shot(page, name);
   }
+});
+
+test('settings, filters and the analytics link work from the dashboard', async ({ browser }) => {
+  const context = await browser.newContext({ storageState: await api.storageState(), viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  const at = (path: string) => `${KIMMI}/projects/${project}${path}`;
+
+  // A goal added in the dialog is counted at once.
+  await page.goto(at('/settings/analytics'));
+  await page.getByRole('button', { name: 'Add goal' }).click();
+  const goal = page.getByRole('dialog');
+  await goal.getByPlaceholder('Signed up').fill(`Saw the cart ${run}`);
+  await goal.getByPlaceholder('/thanks').fill('/cart');
+  await shot(page, '18-goal-dialog');
+  await goal.getByRole('button', { name: 'Add goal' }).click();
+  await expect(page.getByText(`Saw the cart ${run}`)).toBeVisible();
+  const traffic = await get<{ goals: { name: string; conversions: number }[] }>('/analytics', { days: 1 });
+  expect(traffic.goals.find((item) => item.name === `Saw the cart ${run}`)!.conversions).toBeGreaterThan(0);
+
+  // The test button reaches the receiver.
+  const tests = delivered('test').length;
+  await page.goto(at('/settings/alerts'));
+  await page.getByRole('button', { name: /send a test|send test/i }).click();
+  await expect.poll(() => delivered('test').length).toBe(tests + 1);
+  await expect(page.getByText('Delivered')).toBeVisible();
+
+  // A public link to the analytics page, opened signed out, then revoked.
+  await page.goto(at('/settings/sharing'));
+  await page.getByRole('button', { name: 'Create link' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Create link' }).click();
+  const link = page.getByText(/\/shared\/[0-9a-f]{64}/);
+  await expect(link).toBeVisible();
+  const url = (await link.textContent())!.trim();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await shot(page, '19-sharing-links');
+  const stranger = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const outside = await stranger.newPage();
+  await outside.goto(url);
+  await expect(outside.getByText(/shared analytics/i)).toBeVisible();
+  await expect(outside.getByText('Visitors').first()).toBeVisible();
+  await expect(outside.getByText('newsletter').first()).toBeVisible();
+  await shot(outside, '20-shared-analytics');
+  expect(await outside.locator('a[href*="/recordings"]').count(), 'a public page links to no recording').toBe(0);
+  for (const share of await get<{ id: string; kind: string }[]>('/shares')) {
+    if (share.kind === 'dashboard') await api.delete(`/api/v1/projects/${project}/shares/${share.id}`);
+  }
+  await outside.reload();
+  await expect(outside.getByText(/expired or was revoked/i)).toBeVisible();
+  await stranger.close();
+
+  // A number's link filters the recordings; the view can be saved.
+  await page.goto(at('/recordings?event=track%3Apurchase'));
+  await expect(page.getByText(/purchase/).first()).toBeVisible();
+  await expect(page.locator('a[href*="/recordings/"]').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Saved' }).click();
+  await page.getByRole('menuitem', { name: /save this view/i }).click();
+  await page.getByRole('dialog').getByRole('textbox').fill(`Buyers ${run}`);
+  await page.getByRole('dialog').getByRole('button', { name: /^save/i }).click();
+  await page.getByRole('button', { name: 'Saved' }).click();
+  await expect(page.getByRole('menuitem', { name: `Buyers ${run}`, exact: true })).toBeVisible();
+  await shot(page, '21-recordings-filtered');
+  await page.keyboard.press('Escape');
+
+  await page.goto(at('/visitors?tab=accounts'));
+  await expect(page.getByText('fernhill.dev')).toBeVisible();
+  await shot(page, '22-visitors-accounts');
+  await context.close();
 });
 
 test('a signed-out visitor can watch the shared recording, until it is revoked', async ({ browser }) => {

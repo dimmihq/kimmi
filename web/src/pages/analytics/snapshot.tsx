@@ -218,14 +218,19 @@ function Recorded({
       if (next.width && next.height) setResized({ width: next.width, height: next.height });
     });
     player.on('fullsnapshot-rebuilded', () => latestFit.current());
-    const { startedAt, durationMs } = latest.current.data;
-    player.pause(Math.max(0, Math.min(durationMs, ts - startedAt + SETTLE_MS)));
+    const { startedAt, durationMs, navigations } = latest.current.data;
+    // Let the page settle after it opened, but stop short of the next page the visitor went to.
+    const at = ts - startedAt;
+    const next = navigations.find((navigation) => navigation.t > at + 20);
+    const until = next ? Math.max(at, next.t - 20) : durationMs;
+    player.pause(Math.max(0, Math.min(durationMs, until, at + SETTLE_MS)));
     latestFit.current();
     return () => {
       player.destroy();
       mount.innerHTML = '';
     };
-  }, [data.playable, ts]);
+    // A recording still being made arrives in parts: rebuild when more of it has loaded.
+  }, [data.playable, ts, events?.length]);
 
   useLayoutEffect(() => {
     fit();

@@ -173,9 +173,12 @@ function ScrollMap({ shares, stage }: { shares: number[]; stage: SnapshotStage }
           style={{ top: `${index * 10}%`, height: '10%' }}
         >
           <span className="absolute inset-0 bg-brand" style={{ opacity: value * 0.45 }} />
-          <span className={cn('tabular absolute bottom-1 right-1.5', CHIP)}>
-            {Math.round(value * 100)}% reached here
-          </span>
+          {/* One label where the share changes, and at the bottom: ten equal labels say nothing. */}
+          {index === shares.length - 1 || Math.round(value * 100) !== Math.round((shares[index + 1] ?? 0) * 100) ? (
+            <span className={cn('tabular absolute bottom-1 right-1.5', CHIP)}>
+              {Math.round(value * 100)}% reached here
+            </span>
+          ) : null}
         </div>
       ))}
       {fold && fold < stage.height ? (

@@ -162,7 +162,7 @@ export function VisitorsChart({ days }: { days: ChartDay[] }) {
                 }
               >
                 <div
-                  className="flex-1 rounded-t-[2px] bg-brand transition-opacity hover:opacity-80"
+                  className="max-w-40 flex-1 rounded-t-[2px] bg-brand transition-opacity hover:opacity-80"
                   style={{ height: `${(day.visitors / max) * 100}%` }}
                 />
               </Tooltip>
