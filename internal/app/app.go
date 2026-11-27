@@ -23,6 +23,7 @@ import (
 	"github.com/dimmihq/kimmi/internal/config"
 	"github.com/dimmihq/kimmi/internal/guard"
 	"github.com/dimmihq/kimmi/internal/ingest"
+	"github.com/dimmihq/kimmi/internal/notify"
 	"github.com/dimmihq/kimmi/internal/replay"
 	"github.com/dimmihq/kimmi/internal/store/sqlstore"
 	"github.com/dimmihq/kimmi/internal/webui"
@@ -40,6 +41,7 @@ type App struct {
 	Cache   *ingest.Cache
 	Flusher *ingest.Flusher
 	Worker  *worker.Worker
+	Notify  *notify.Notifier
 	log     *slog.Logger
 	handler http.Handler
 }
@@ -73,6 +75,20 @@ func New(ctx context.Context, cfg config.Config, version, commit string, log *sl
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("/i/", http.NotFound)
 
+	// One notifier per node: ingest raises alerts from incoming data, the
+	// worker from the clock, the API from the test and "send now" buttons.
+	a.Notify = notify.New(db, log, cfg.PublicURL, version, func(id string) (notify.Project, bool) {
+		if a.Cache == nil {
+			return notify.Project{}, false
+		}
+		p, ok := a.Cache.ByID(id)
+		if !ok {
+			return notify.Project{}, false
+		}
+		return notify.Project{ID: p.ID, Name: p.Name, Timezone: p.Timezone, Alerts: p.Settings.Alerts}, true
+	})
+	a.Worker.Notify = a.Notify
+
 	proxies := guard.Proxies{Trusted: cfg.TrustedProxies}
 	stats := &ingest.Stats{}
 	if cfg.Has(config.RoleIngest) {
@@ -83,24 +99,26 @@ func New(ctx context.Context, cfg config.Config, version, commit string, log *sl
 		}
 		a.Flusher = ingest.NewFlusher(b, db, nodeName(), stats, log,
 			ingest.Limits{Buffer: cfg.IngestBuffer, Project: cfg.IngestProjectBuffer})
+		a.Flusher.OnHits = a.Notify.Hits
 		(&ingest.Handler{Cache: a.Cache, Flusher: a.Flusher, Stats: stats, Proxies: proxies,
-			Limit: guard.NewLimiter(cfg.IngestRate, cfg.IngestBurst), MaxReading: cfg.IngestBuffer}).Register(mux)
+			Limit: guard.NewLimiter(cfg.IngestRate, cfg.IngestBurst), MaxReading: cfg.IngestBuffer,
+			Salts: &ingest.Salts{Store: db}, Feedback: db, OnFeedback: a.Notify.Feedback}).Register(mux)
 	}
 	if cfg.Has(config.RoleAPI) {
 		svc := &api.API{Store: db, Blob: b, Source: source, Worker: a.Worker, Signer: auth.NewSigner(cfg.Secret),
 			Config: cfg, Log: log, Projects: invalidator{a.Cache}, Version: version, Commit: commit, StartedAt: time.Now(),
-			Proxies: proxies, AuthLimit: guard.NewLimiter(cfg.AuthRate/60, cfg.AuthBurst)}
+			Proxies: proxies, AuthLimit: guard.NewLimiter(cfg.AuthRate/60, cfg.AuthBurst), Notify: a.Notify}
 		if a.Flusher != nil {
 			svc.Ingest = func() api.IngestHealth {
 				return api.IngestHealth{Snapshot: stats.Snapshot(time.Now()), BufferedBytes: a.Flusher.Buffered()}
 			}
 		}
 		mux.Handle("/api/", guard.Dashboard(svc.Handler(), cfg.Secure()))
+		mux.Handle("/mcp", svc.Handler())
 		mux.Handle("/", guard.Dashboard(webui.Handler(), cfg.Secure()))
-		mux.Handle("GET /kimmi.js", webui.Handler())
-	} else {
-		mux.Handle("GET /kimmi.js", webui.Handler())
 	}
+	mux.Handle("GET /kimmi.js", webui.Handler())
+	mux.Handle("GET /kimmi-feedback.js", webui.Handler())
 	a.handler = guard.Transport(mux, cfg.Secure())
 	return a, nil
 }
@@ -205,6 +223,7 @@ func (a *App) Run(ctx context.Context, ln net.Listener) error {
 		}
 		defer dbg.Close()
 	}
+	wg.Go(func() { a.Notify.Run(jobs) })
 	wg.Go(func() { trimMemory(jobs, a.log) })
 
 	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute,

@@ -227,8 +227,16 @@ func projectSettings(p store.Project) settings.Settings {
 	return settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred)
 }
 
-func (a *API) getSettings(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {
-	writeJSON(w, http.StatusOK, projectSettings(proj))
+// getSettings shows the webhook, which can carry a secret, to admins only.
+func (a *API) getSettings(w http.ResponseWriter, r *http.Request, p *principal, proj store.Project) {
+	s := projectSettings(proj)
+	if role, err := a.projectRole(r, p, proj.ID); err != nil || !auth.AtLeast(role, store.RoleAdmin) {
+		if s.Alerts.WebhookURL != "" {
+			s.Alerts.WebhookURL = "hidden"
+		}
+		s.Alerts.Secret = ""
+	}
+	writeJSON(w, http.StatusOK, s)
 }
 
 func (a *API) patchSettings(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {

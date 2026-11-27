@@ -110,11 +110,13 @@ func (a *API) overview(w http.ResponseWriter, r *http.Request, _ *principal, pro
 
 func (a *API) listRecordings(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {
 	q := r.URL.Query()
-	page, err := a.Store.ListRecordings(r.Context(), store.RecordingQuery{
+	query := store.RecordingQuery{
 		ProjectID: proj.ID, View: q.Get("view"), Q: strings.TrimSpace(q.Get("q")), Duration: q.Get("duration"),
 		Device: q.Get("device"), Rage: q.Get("rage") == "1", Errors: q.Get("errors") == "1", VisitorID: q.Get("visitor"),
 		Page: intParam(r, "page", 0, 0, 1<<20), Limit: intParam(r, "limit", 25, 1, 100),
-	})
+	}
+	recordingFilters(r, &query)
+	page, err := a.Store.ListRecordings(r.Context(), query)
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -145,6 +147,10 @@ func (a *API) getRecording(w http.ResponseWriter, r *http.Request, _ *principal,
 // recordingEvents streams {events, lastSeq, complete}. The events array is
 // written chunk by chunk, so memory stays flat however long the recording is.
 func (a *API) recordingEvents(w http.ResponseWriter, r *http.Request, _ *principal, proj store.Project) {
+	a.streamEvents(w, r, proj.ID, r.PathValue("rid"))
+}
+
+func (a *API) streamEvents(w http.ResponseWriter, r *http.Request, projectID, recordingID string) {
 	after := int64(-1)
 	if s := r.URL.Query().Get("after"); s != "" {
 		n, err := strconv.ParseInt(s, 10, 64)
@@ -154,7 +160,7 @@ func (a *API) recordingEvents(w http.ResponseWriter, r *http.Request, _ *princip
 		}
 		after = n
 	}
-	rec, err := a.Store.GetRecording(r.Context(), proj.ID, r.PathValue("rid"))
+	rec, err := a.Store.GetRecording(r.Context(), projectID, recordingID)
 	if err != nil {
 		a.fail(w, r, err)
 		return

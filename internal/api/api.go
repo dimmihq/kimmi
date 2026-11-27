@@ -16,6 +16,7 @@ import (
 	"github.com/dimmihq/kimmi/internal/config"
 	"github.com/dimmihq/kimmi/internal/guard"
 	"github.com/dimmihq/kimmi/internal/ingest"
+	"github.com/dimmihq/kimmi/internal/notify"
 	"github.com/dimmihq/kimmi/internal/replay"
 	"github.com/dimmihq/kimmi/internal/store"
 	"github.com/dimmihq/kimmi/internal/worker"
@@ -37,6 +38,8 @@ type API struct {
 	// AuthLimit counts sign-in style attempts per client address; nil allows all.
 	AuthLimit *guard.Limiter
 	Proxies   guard.Proxies
+	// Notify delivers webhooks: the test and "send now" buttons use it.
+	Notify *notify.Notifier
 
 	Version, Commit string
 	StartedAt       time.Time
@@ -112,6 +115,9 @@ func (a *API) routes(m *http.ServeMux) {
 	m.HandleFunc("GET "+p+"/visitors/{vid}", a.project(store.RoleViewer, a.getVisitor))
 	m.HandleFunc("DELETE "+p+"/visitors/{vid}", a.project(store.RoleMember, a.deleteVisitor))
 	m.HandleFunc("POST "+p+"/visitors/erase", a.project(store.RoleMember, a.eraseVisitors))
+
+	a.analyticsRoutes(m, p)
+	a.mcpRoutes(m)
 
 	m.HandleFunc("GET "+v+"/storage", a.user(store.RoleViewer, a.storage))
 	m.HandleFunc("POST "+v+"/storage/cleanup", a.user(store.RoleAdmin, a.cleanup))

@@ -18,7 +18,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dimmihq/kimmi/internal/blob"
+	"github.com/dimmihq/kimmi/internal/notify"
 	"github.com/dimmihq/kimmi/internal/replay"
+	"github.com/dimmihq/kimmi/internal/settings"
 	"github.com/dimmihq/kimmi/internal/store"
 )
 
@@ -42,6 +44,8 @@ type Store interface {
 	ExpireSessions(ctx context.Context, now int64) (int, int64, error)
 	PurgeDeleted(ctx context.Context, now int64) (int, error)
 	MaintainPartitions(ctx context.Context, now int64) error
+	ListAllProjects(ctx context.Context) ([]store.Project, error)
+	DeleteAnalyticsBefore(ctx context.Context, projectID string, before int64) (int, error)
 }
 
 // Worker holds the jobs' dependencies.
@@ -50,6 +54,9 @@ type Worker struct {
 	Blob   blob.Store
 	Source *replay.Source
 	Log    *slog.Logger
+	// Notify, when set, gets the projects every few minutes for the alerts
+	// that follow the clock.
+	Notify *notify.Notifier
 
 	cleaning sync.Mutex
 	sealing  sync.Mutex // one sealing run at a time, so its memory is bounded
@@ -299,6 +306,9 @@ func (w *Worker) Cleanup(ctx context.Context) (CleanupResult, error) {
 		return res, err
 	}
 	res.Deleted = n
+	if err := w.expireAnalytics(ctx, now); err != nil {
+		return res, err
+	}
 	_, freed, err := w.CollectSealed(ctx)
 	res.FreedBytes += freed
 	if err != nil {
@@ -310,6 +320,37 @@ func (w *Worker) Cleanup(ctx context.Context) (CleanupResult, error) {
 		return res, fmt.Errorf("collect live objects: %w", err)
 	}
 	return res, nil
+}
+
+// expireAnalytics removes visits, events and feedback older than each
+// project's analytics retention.
+func (w *Worker) expireAnalytics(ctx context.Context, now int64) error {
+	projects, err := w.Store.ListAllProjects(ctx)
+	if err != nil {
+		return err
+	}
+	for _, p := range projects {
+		days := settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred).Analytics.RetentionDays
+		if _, err := w.Store.DeleteAnalyticsBefore(ctx, p.ID, now-int64(days)*store.DayMs); err != nil {
+			return fmt.Errorf("expire analytics of %s: %w", p.ID, err)
+		}
+	}
+	return nil
+}
+
+// alerts hands the projects to the notifier.
+func (w *Worker) alerts(ctx context.Context) {
+	projects, err := w.Store.ListAllProjects(ctx)
+	if err != nil {
+		w.Log.Error("alerts: list projects", "err", err)
+		return
+	}
+	list := make([]notify.Project, 0, len(projects))
+	for _, p := range projects {
+		list = append(list, notify.Project{ID: p.ID, Name: p.Name, Timezone: p.Timezone,
+			Alerts: settings.Decode(p.Settings, p.RetentionDays, p.KeepStarred).Alerts})
+	}
+	w.Notify.Periodic(ctx, list, time.Now())
 }
 
 // LastSeal reports when sealing last ran and how it went.
@@ -325,6 +366,8 @@ func (w *Worker) Run(ctx context.Context, idle time.Duration) {
 	collect := time.NewTicker(5 * time.Minute)
 	partitions := time.NewTicker(time.Hour)
 	cleanup := time.NewTimer(time.Minute)
+	alerts := time.NewTicker(5 * time.Minute)
+	defer alerts.Stop()
 	defer seal.Stop()
 	defer collect.Stop()
 	defer partitions.Stop()
@@ -333,6 +376,10 @@ func (w *Worker) Run(ctx context.Context, idle time.Duration) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-alerts.C:
+			if w.Notify != nil {
+				w.alerts(ctx)
+			}
 		case <-seal.C:
 			if n, err := w.Seal(ctx, idle); err != nil {
 				w.Log.Error("seal recordings", "err", err, "sealed", n)
