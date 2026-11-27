@@ -237,7 +237,10 @@ export function AnalyticsSettings() {
         />
       ) : (
         <>
-          <SettingSection title="Counting" description="Applies to visits from now on.">
+          <SettingSection
+            title="Counting"
+            description="Since version 0.2, kimmi counts page views, where visits come from, clicks, errors and page speed for every visitor, recorded or not. No page content is kept. These switches say what is counted."
+          >
             <SettingRow
               title="Count visits"
               description="Page views and visits are counted for every visitor, separately from recording."
@@ -322,25 +325,38 @@ export function AnalyticsSettings() {
               title="Feedback button"
               description={
                 <>
-                  Shows a small Feedback button on your site. Messages arrive with the session they
-                  were sent from. From your own code, call {code("kimmi.feedback('...')")} instead.
+                  Where a small Feedback button sits on your site. Hidden shows none: call{' '}
+                  {code("kimmi.feedback('...')")} from a button of your own. Messages arrive with
+                  the session they were sent from.
                 </>
               }
             >
-              <Loaded value={feedback} kind="switch">
-                {(current) => (
-                  <Switch
-                    label="Feedback button"
-                    disabled={!manage}
-                    checked={current.widget}
-                    onChange={(widget) =>
-                      update.mutate(
-                        { feedback: { widget } },
-                        { onSuccess: () => toast('Saved'), onError: failed },
-                      )
-                    }
-                  />
-                )}
+              <Loaded value={feedback} kind="field">
+                {(current) => {
+                  const places = [
+                    { value: 'hidden', label: 'Hidden' },
+                    { value: 'bottom-right', label: 'Bottom right' },
+                    { value: 'bottom-left', label: 'Bottom left' },
+                  ];
+                  return manage ? (
+                    <Select
+                      block
+                      label="Feedback button"
+                      value={current.button}
+                      onChange={(button) =>
+                        update.mutate(
+                          { feedback: { button: button as typeof current.button } },
+                          { onSuccess: () => toast('Saved'), onError: failed },
+                        )
+                      }
+                      options={places}
+                    />
+                  ) : (
+                    <p className="text-control text-fg-meta">
+                      {places.find((place) => place.value === current.button)?.label}
+                    </p>
+                  );
+                }}
               </Loaded>
             </SettingRow>
           </SettingSection>

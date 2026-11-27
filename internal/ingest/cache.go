@@ -124,9 +124,14 @@ type analyticsConfig struct {
 
 func configBody(recording bool, s settings.Settings) []byte {
 	a := s.Analytics
+	// The button shows only where visits are counted: feedback needs a visit.
+	button := "hidden"
+	if recording && a.Enabled {
+		button = s.Feedback.Button
+	}
 	b, _ := json.Marshal(configResponse{Recording: recording, SampleRate: s.Capture.SampleRate, Privacy: s.Privacy, Capture: s.Capture,
 		Analytics: analyticsConfig{Enabled: recording && a.Enabled, Cookieless: a.Cookieless, AutoEvents: a.AutoEvents, Heatmaps: a.Heatmaps},
-		Feedback:  settings.Feedback{Widget: recording && a.Enabled && s.Feedback.Widget}})
+		Feedback:  settings.Feedback{Button: button}})
 	return b
 }
 

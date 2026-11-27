@@ -31,7 +31,7 @@ Or with no build step:
 | `getSessionId()` | The session being recorded, or `null`. |
 | `track(name, props?)` | Sends a custom event. See [Analytics](#analytics). |
 | `feedback(text, { email? })` | Sends a visitor's feedback to the dashboard. |
-| `showFeedback()` | Shows the feedback button. |
+| `showFeedback(position?)` | Shows the feedback button, `'bottom-right'` (default) or `'bottom-left'`. |
 
 No call throws, and all of them do nothing on the server.
 
@@ -87,7 +87,7 @@ kimmi.feedback('The export button does nothing', { email: 'ada@example.com' });
 kimmi.showFeedback();
 ```
 
-`feedback()` sends up to 2000 characters, scrubbed, and the email as given. `showFeedback()` adds a small "Feedback" button to the bottom right of the page. Its code is a separate file, `kimmi-feedback.js`, loaded from your kimmi server on first use, so it costs nothing until then. A project can also turn the button on from the dashboard. Both need analytics to be on.
+`feedback()` sends up to 2000 characters, scrubbed, and the email as given. `showFeedback()` adds a small "Feedback" button to the bottom right of the page, or the bottom left with `showFeedback('bottom-left')`. A project can also show it without code, from its Analytics settings, where it is hidden by default. Its code is a separate file, `kimmi-feedback.js`, loaded from your kimmi server on first use, so it costs nothing until then. A project can also turn the button on from the dashboard. Both need analytics to be on.
 
 ## Privacy
 

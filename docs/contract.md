@@ -144,7 +144,7 @@ CORS: any origin, no credentials. A project's `origins` list, when not empty, is
                "minDurationMs": 2000, "idleTimeoutMs": 900000, "maxLengthMs": 3600000,
                "urlRules": [ { "type": "contains", "pattern": "/checkout" } ] },
   "analytics": { "enabled": true, "cookieless": false, "autoEvents": true, "heatmaps": true },
-  "feedback": { "widget": false }
+  "feedback": { "button": "hidden" }
 }
 ```
 
@@ -238,7 +238,7 @@ kimmi.identify(id: string, traits?: { email?: string; name?: string; [k: string]
 kimmi.optIn(); kimmi.optOut(); kimmi.stop(); kimmi.getSessionId(): string | null
 kimmi.track(name: string, props?: Record<string, unknown>)   // a `value` or `revenue` number is summed in reports
 kimmi.feedback(text: string, options?: { email?: string })
-kimmi.showFeedback()                                         // loads {host}/kimmi-feedback.js and shows the button
+kimmi.showFeedback(position?: 'bottom-right' | 'bottom-left') // loads {host}/kimmi-feedback.js and shows the button
 ```
 
 Analytics start when `analytics.enabled`, independently of `sampleRate`, `urlRules`, `minDurationMs` and `startOnError`. A visit is named, in order: by the running recording session; when `analytics.cookieless`, by nothing kept in the browser (an id in memory for the page load, an empty `anonymousId`); otherwise by the anonymous id in `localStorage` and a visit in `sessionStorage` (`kimmi.visit`, 30 minutes of inactivity), when consent allows storage. `optOut()` and Do Not Track (with `privacy.respectDnt`) stop analytics too. With `analytics.cookieless` the recorder waits for `kimmi.optIn()` as if `privacy.requireConsent` were on, and nothing is written to `localStorage` or `sessionStorage` before that. Every string in a hit goes through the same scrubbing as console, network and error text; click text of a masked element is empty; link targets of `mailto:` and `tel:` are never sent.
@@ -308,7 +308,7 @@ Project = { id, name, slug, platform, origin, timezone, publicKey, origins: stri
             stats: { recordings24h, live, avgDurationMs, storageBytes, recordings, series: number[] /* 30 daily counts, oldest first */, lastRecordingAt: number|null } }
 ProjectSettings = { privacy: {...as in /i/v1/config, including scrubEmails and scrubPhones}, capture: {...as in /i/v1/config, plus sampleRate}, retention: { days: 7|30|90|365, keepStarred: boolean },
                     analytics: { enabled, cookieless, autoEvents, heatmaps: boolean, retentionDays: 30|90|365|730, goals: Goal[] /* at most 20 */, funnels: Funnel[] /* at most 10 */ },
-                    feedback: { widget: boolean },
+                    feedback: { button: "hidden"|"bottom-right"|"bottom-left" /* default hidden */ },
                     alerts: { webhookUrl, secret: string, newErrors: boolean, errorSpike, rageSpike: number /* in an hour; 0 is off */, noTraffic, feedback, weeklyDigest: boolean },
                     sharing: { enabled: boolean } }
 Step = { kind: "page"|"event", value: string }   // a path, or a prefix ending in *; or a tracked event's name

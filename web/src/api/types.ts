@@ -169,7 +169,8 @@ export interface ProjectSettings {
   capture: CaptureSettings;
   retention: { days: 7 | 30 | 90 | 365; keepStarred: boolean };
   analytics: AnalyticsSettings;
-  feedback: { widget: boolean };
+  /** Where the feedback button sits on the site; `hidden` shows none. */
+  feedback: { button: 'hidden' | 'bottom-right' | 'bottom-left' };
   alerts: AlertSettings;
   sharing: { enabled: boolean };
 }

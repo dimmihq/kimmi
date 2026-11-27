@@ -1,6 +1,6 @@
 {
   "name": "@kimmi/browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browser SDK for kimmi, self-hosted session replay",
   "license": "MIT",
   "type": "module",

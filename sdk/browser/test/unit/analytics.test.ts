@@ -55,7 +55,7 @@ function config(overrides: Overrides = {}) {
     ...(overrides.analytics === null
       ? {}
       : { analytics: { enabled: true, cookieless: false, autoEvents: true, heatmaps: true, ...overrides.analytics } }),
-    feedback: { widget: false, ...overrides.feedback },
+    feedback: { button: 'hidden', ...overrides.feedback },
   };
 }
 
@@ -152,7 +152,7 @@ describe('remote config', () => {
     const normal = normalizeConfig({ recording: true });
     expect(normal.analytics.enabled).toBeFalsy();
     expect(normal.analytics.cookieless).toBeFalsy();
-    expect(normal.feedback.widget).toBeFalsy();
+    expect(normal.feedback.button).toBeFalsy();
   });
 
   it('sends no hits to a server from before analytics', async () => {
@@ -1005,7 +1005,7 @@ describe('feedback', () => {
   });
 
   it('loads the widget by itself when the project turns it on, and waits for analytics when asked early', async () => {
-    await startClient(config({ feedback: { widget: true } }));
+    await startClient(config({ feedback: { button: 'bottom-right' } }));
     expect(document.querySelectorAll('script[src*="kimmi-feedback"]')).toHaveLength(1);
     document.querySelector('script[src*="kimmi-feedback"]')!.remove();
     client.stop();
@@ -1017,6 +1017,25 @@ describe('feedback', () => {
     expect(document.querySelector('script[src*="kimmi-feedback"]')).toBeNull();
     await settle(0);
     expect(document.querySelectorAll('script[src*="kimmi-feedback"]')).toHaveLength(1);
+    document.querySelector('script[src*="kimmi-feedback"]')!.remove();
+  });
+
+  it('shows no button while the project keeps it hidden, and puts it where the project says', async () => {
+    const bridge = () => (window as unknown as { __kimmiFeedback?: { left?: boolean } }).__kimmiFeedback;
+    delete (window as unknown as { __kimmiFeedback?: unknown }).__kimmiFeedback;
+    await startClient(config({ feedback: { button: 'hidden' } }));
+    expect(document.querySelector('script[src*="kimmi-feedback"]')).toBeNull();
+    expect(bridge()).toBeUndefined();
+    client.stop();
+
+    await startClient(config({ feedback: { button: 'bottom-left' } }));
+    expect(document.querySelectorAll('script[src*="kimmi-feedback"]')).toHaveLength(1);
+    expect(bridge()!.left).toBe(true);
+    document.querySelector('script[src*="kimmi-feedback"]')!.remove();
+    client.stop();
+
+    await startClient(config({ feedback: { button: 'bottom-right' } }));
+    expect(bridge()!.left).toBe(false);
     document.querySelector('script[src*="kimmi-feedback"]')!.remove();
   });
 });

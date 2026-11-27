@@ -36,7 +36,7 @@ const config = {
     urlRules: [],
   },
   analytics: { enabled: true, cookieless: false, autoEvents: true, heatmaps: true },
-  feedback: { widget: false },
+  feedback: { button: 'hidden' },
 };
 
 const keys = new Set(['km_pub_react', 'km_pub_next', 'km_pub_script']);

@@ -95,10 +95,15 @@ type Analytics struct {
 	Funnels       []Funnel `json:"funnels"`
 }
 
-// Feedback controls the feedback button.
+// Feedback controls the feedback button on the site.
 type Feedback struct {
-	Widget bool `json:"widget"`
+	// Button is where the button sits: "hidden" (the site calls
+	// kimmi.feedback itself), "bottom-right" or "bottom-left".
+	Button string `json:"button"`
 }
+
+// FeedbackButtons are the allowed places of the feedback button.
+var FeedbackButtons = []string{"hidden", "bottom-right", "bottom-left"}
 
 // Alerts sends events to one webhook. Nothing is sent without a URL.
 type Alerts struct {
@@ -154,6 +159,7 @@ func Default() Settings {
 			MinDurationMs: 2000, IdleTimeoutMs: 900000, MaxLengthMs: 3600000, URLRules: []URLRule{}},
 		Retention: Retention{Days: 30, KeepStarred: true},
 		Analytics: Analytics{Enabled: true, AutoEvents: true, Heatmaps: true, RetentionDays: 365, Goals: []Goal{}, Funnels: []Funnel{}},
+		Feedback:  Feedback{Button: "hidden"},
 		Alerts:    Alerts{NewErrors: true, ErrorSpike: 10, RageSpike: 10, Feedback: true, WeeklyDigest: true},
 	}
 }
@@ -215,6 +221,9 @@ func (s *Settings) normalize() {
 		}
 	}
 	s.Alerts.WebhookURL = strings.TrimSpace(s.Alerts.WebhookURL)
+	if s.Feedback.Button == "" {
+		s.Feedback.Button = "hidden"
+	}
 }
 
 // newID names a goal or funnel: 8 random hex digits.
@@ -329,6 +338,9 @@ func (s Settings) validate() map[string]string {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || len(u) > 2000 {
 			fields["alerts.webhookUrl"] = "Must be an http or https URL"
 		}
+	}
+	if !slices.Contains(FeedbackButtons, s.Feedback.Button) {
+		fields["feedback.button"] = "Must be hidden, bottom-right or bottom-left"
 	}
 	if len(s.Alerts.Secret) > 200 {
 		fields["alerts.secret"] = "At most 200 characters"

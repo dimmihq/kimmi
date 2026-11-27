@@ -106,7 +106,7 @@ test.beforeAll(async () => {
           },
         ],
       },
-      feedback: { widget: true },
+      feedback: { button: 'bottom-left' },
       alerts: { webhookUrl: HOOK, secret: 'stack-test', newErrors: true, errorSpike: 0, rageSpike: 0, feedback: true },
       sharing: { enabled: true },
     },
@@ -114,8 +114,8 @@ test.beforeAll(async () => {
   expect(settings.status(), await settings.text()).toBe(200);
   // An ingest node reloads projects within 5 seconds; this one is told at once, but be sure.
   await expect
-    .poll(async () => ((await (await api.get(`/i/v1/config?key=${KEY}`)).json()) as { feedback: { widget: boolean } }).feedback.widget)
-    .toBe(true);
+    .poll(async () => ((await (await api.get(`/i/v1/config?key=${KEY}`)).json()) as { feedback: { button: string } }).feedback.button)
+    .toBe('bottom-left');
 });
 
 test.afterAll(async () => {
@@ -141,10 +141,14 @@ test('a visitor buys something, hits an error, rage-clicks and leaves feedback',
     await expect(page.getByText('Stock levels are unavailable right now.')).toBeVisible();
     for (let i = 0; i < 5; i++) await page.getByTestId('dead-button').click();
     await page.waitForTimeout(1800);
-    // The feedback button floats over the footer's corner, where this link sits.
-    await page.getByTestId('trigger-error').dispatchEvent('click');
+    // The project put the feedback button bottom left, so the footer's right corner is free to click.
+    const button = page.getByRole('button', { name: 'Feedback', exact: true });
+    const box = (await button.boundingBox())!;
+    expect(box.x, 'the button sits in the left corner').toBeLessThan(40);
+    expect(box.y + box.height, 'at the bottom').toBeGreaterThan(page.viewportSize()!.height - 40);
+    await page.getByTestId('trigger-error').click();
 
-    await page.getByRole('button', { name: 'Feedback', exact: true }).click();
+    await button.click();
     const dialog = page.getByRole('dialog', { name: 'Send feedback' });
     await dialog.getByRole('textbox').first().fill(feedbackText);
     await page.getByRole('button', { name: 'Send', exact: true }).click();

@@ -4,6 +4,8 @@
 interface Bridge {
   send(text: string, email?: string): void;
   labels?: Partial<typeof defaults>;
+  /** Sit in the bottom left corner instead of the bottom right. */
+  left?: boolean;
 }
 
 const defaults = {
@@ -26,6 +28,8 @@ button{cursor:pointer;border-radius:6px;border:1px solid var(--line);background:
 button:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--fg);outline-offset:1px}
 .open{box-shadow:0 1px 4px rgba(0,0,0,.2)}
 .send{background:var(--accent);color:var(--on);border-color:var(--accent)}
+:host(.left){right:auto;left:16px}
+:host(.left) .panel{right:auto;left:0}
 .panel{position:absolute;right:0;bottom:0;width:300px;max-width:calc(100vw - 32px);padding:12px;border-radius:8px;
 border:1px solid var(--line);background:var(--bg);color:var(--fg);box-shadow:0 4px 16px rgba(0,0,0,.2)}
 h2{margin:0 0 8px;font-size:14px;font-weight:600}
@@ -42,7 +46,7 @@ function mount(bridge: Bridge): void {
   const labels = { ...defaults, ...bridge.labels };
   const host = document.createElement('div');
   // kimmi-ignore: what is typed here is not recorded.
-  host.className = 'kimmi-ignore';
+  host.className = bridge.left ? 'kimmi-ignore left' : 'kimmi-ignore';
   // Clicks on kimmi's own button are not the site's: heatmaps and rage clicks skip them.
   host.setAttribute('data-kimmi-own', '');
   const root = host.attachShadow({ mode: 'open' });

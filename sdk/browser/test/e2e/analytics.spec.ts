@@ -402,7 +402,7 @@ test.describe('the script-tag install', () => {
   });
 
   test('the project can show the widget by itself', async ({ page }) => {
-    await openLab(page, { feedback: { widget: true } });
+    await openLab(page, { feedback: { button: 'bottom-right' } });
     await expect(page.getByRole('button', { name: 'Feedback', exact: true })).toBeVisible();
   });
 });

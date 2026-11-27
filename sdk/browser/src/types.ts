@@ -75,7 +75,8 @@ export interface AnalyticsConfig {
 
 export interface FeedbackConfig {
   /** Show the feedback button without a `showFeedback()` call. */
-  widget: boolean;
+  /** Where the feedback button sits; `hidden` (or missing) shows none. */
+  button?: 'hidden' | 'bottom-right' | 'bottom-left';
 }
 
 export interface RemoteConfig {

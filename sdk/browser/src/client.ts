@@ -115,6 +115,7 @@ export class Kimmi {
   private earlyTracks: Array<[name: string, props: unknown, at: number]> | null = [];
   /** The feedback button: 0 not asked for, 1 wanted once analytics runs, 2 loaded. */
   private widget = 0;
+  private widgetLeft = false;
   /** Console, network and error events from before the first snapshot, replayed right after it. */
   private early: Array<{ tag: CustomTag; payload: unknown }> | null = null;
   private detector: FrustrationDetector | null = null;
@@ -210,7 +211,8 @@ export class Kimmi {
     if (this.analytics && typeof text === 'string') this.analytics.feedback(text, options && options.email);
   }
 
-  showFeedback(): void {
+  showFeedback(position?: 'bottom-right' | 'bottom-left'): void {
+    if (position) this.widgetLeft = position === 'bottom-left';
     if (this.widget > 1) return;
     this.widget = 1;
     if (!this.analytics || !this.analytics.active) return;
@@ -218,6 +220,7 @@ export class Kimmi {
     (window as Window & { __kimmiFeedback?: unknown }).__kimmiFeedback = {
       send: safe((text: string, email?: string) => this.feedback(text, { email })),
       labels: {},
+      left: this.widgetLeft,
     };
     const script = document.createElement('script');
     script.src = `${this.options!.host}/kimmi-feedback.js`;
@@ -303,7 +306,9 @@ export class Kimmi {
     const analytics = this.analytics;
     (this.earlyTracks || []).forEach((call) => analytics.track(...call));
     this.earlyTracks = null;
-    if (config.feedback.widget || this.widget) this.showFeedback();
+    const button = config.feedback.button;
+    if (button === 'bottom-left' || button === 'bottom-right') this.showFeedback(this.widget ? undefined : button);
+    else if (this.widget) this.showFeedback();
   }
 
   private stopAnalytics(send: boolean): void {

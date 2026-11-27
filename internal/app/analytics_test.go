@@ -101,7 +101,7 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	// The SDK learns that analytics is on.
 	var conf struct {
 		Analytics struct{ Enabled, Cookieless, AutoEvents, Heatmaps bool }
-		Feedback  struct{ Widget bool }
+		Feedback  struct{ Button string }
 	}
 	res, err := http.Get(srv.URL + "/i/v1/config?key=" + proj.PublicKey)
 	if err != nil {
@@ -109,7 +109,7 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	}
 	json.NewDecoder(res.Body).Decode(&conf)
 	res.Body.Close()
-	if !conf.Analytics.Enabled || conf.Analytics.Cookieless || !conf.Analytics.Heatmaps || conf.Feedback.Widget {
+	if !conf.Analytics.Enabled || conf.Analytics.Cookieless || !conf.Analytics.Heatmaps || conf.Feedback.Button != "hidden" {
 		t.Fatalf("config: %+v", conf)
 	}
 
@@ -123,6 +123,7 @@ func analyticsEndToEnd(t *testing.T, cfg config.Config) {
 	}
 	owner.do("PATCH", p+"/settings", obj{"analytics": obj{"goals": []obj{{"name": "", "kind": "page", "value": "/thanks"}}}}, 400, nil)
 	owner.do("PATCH", p+"/settings", obj{"alerts": obj{"webhookUrl": "ftp://nope"}}, 400, nil)
+	owner.do("PATCH", p+"/settings", obj{"feedback": obj{"button": "top"}}, 400, nil)
 	owner.do("PATCH", p+"/settings", obj{
 		"analytics": obj{
 			"goals":   []obj{{"name": "Signed up", "kind": "event", "value": "signup"}, {"name": "Thanks page", "kind": "page", "value": "/thanks"}},
